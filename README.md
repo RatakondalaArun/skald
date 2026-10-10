@@ -140,7 +140,7 @@ Global flags: `--json` (JSON output on read commands), `-p, --project <slug>`. S
 | Command | Purpose |
 |---|---|
 | `init` | Create the data directory and database |
-| `project create\|list\|show\|archive` | Manage projects (`create` takes `--slug`, `--repo`, `--no-repo`, `--description`) |
+| `project create\|list\|show\|archive\|link` | Manage projects (`create` takes `--slug`, `--repo`, `--no-repo`, `--description`; `link` ties an existing project to a directory, or removes the link with `--unlink`) |
 | `feature add\|list` | Add features (`--weight`, `--position`, `--description`) |
 | `task add\|list\|show` | Create and view tasks (`add` needs `--feature`; also `--priority`, `--weight`, `--criteria`, `--key`) |
 | `task start\|done\|block\|unblock\|cancel\|reopen` | Move a task through its lifecycle (`block` needs `--reason`; `done` takes `--force`, `--note`) |

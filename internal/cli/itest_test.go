@@ -598,3 +598,25 @@ func TestBackupIsConsistent(t *testing.T) {
 		t.Errorf("backup has %d tasks, want 4 (%v)", tasks, err)
 	}
 }
+
+func TestProjectLink(t *testing.T) {
+	s := newSandbox(t)
+	s.ok("project", "create", "Unlinked", "--no-repo")
+	s.ok("project", "create", "Other", "--no-repo")
+	// Without a link, a project is not resolved from the directory.
+	s.fail(1, "task", "list")
+	r := s.ok("project", "link", "unlinked")
+	contains(t, r.stdout, "linked")
+	// Two projects exist but only one is linked: cwd resolution picks it.
+	r = s.ok("status")
+	contains(t, r.stdout, "Unlinked")
+	// Another project cannot take the same directory.
+	r = s.fail(1, "project", "link", "other")
+	contains(t, r.stderr, "already linked")
+	r = s.fail(2, "project", "link", "other", "--unlink", "--repo", s.repo)
+	contains(t, r.stderr, "cannot be used together")
+	// Unlink, then the other project can take it.
+	r = s.ok("project", "link", "unlinked", "--unlink")
+	contains(t, r.stdout, "unlinked")
+	s.ok("project", "link", "other")
+}

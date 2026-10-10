@@ -184,6 +184,37 @@ func (s *Service) ArchiveProject(ctx context.Context, actor domain.Actor, projec
 	return out, err
 }
 
+// LinkProject links an active project to a repository directory, or unlinks it
+// when repoPath is empty. The path is normalised the same way as at creation.
+// A path owned by another active project is a ValidationError naming it.
+func (s *Service) LinkProject(ctx context.Context, actor domain.Actor, projectID int64, repoPath string) (domain.Project, error) {
+	norm := ""
+	if strings.TrimSpace(repoPath) != "" {
+		var err error
+		if norm, err = NormalizeRepoPath(repoPath); err != nil {
+			return domain.Project{}, &domain.ValidationError{Field: "repo", Problem: err.Error(), Hint: "Pass an existing directory."}
+		}
+	}
+	var out domain.Project
+	err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		cur, err := store.GetProject(ctx, tx, projectID)
+		if err != nil {
+			return err
+		}
+		if err := ensureProjectActive(cur); err != nil {
+			return err
+		}
+		if norm != "" {
+			if owner, err := store.GetProjectByRepoPath(ctx, tx, norm); err == nil && owner.ID != projectID {
+				return &domain.ValidationError{Field: "repo", Problem: fmt.Sprintf("%s is already linked to project %q", norm, owner.Slug), Hint: "Archive that project or unlink it first."}
+			}
+		}
+		out, err = store.SetProjectRepoPath(ctx, tx, s.meta(actor), projectID, norm)
+		return err
+	})
+	return out, store.Classify(s.db.Path(), err)
+}
+
 // ensureProjectActive refuses changes to archived projects.
 func ensureProjectActive(p domain.Project) error {
 	if p.Status == domain.ProjectArchived {

@@ -178,3 +178,30 @@ func UpdateProjectSettings(ctx context.Context, tx *sql.Tx, m Meta, id int64, s 
 	}
 	return GetProject(ctx, tx, id)
 }
+
+// SetProjectRepoPath links a project to a repository path, or unlinks it when
+// path is empty, and appends project.updated with the old and new paths. The
+// path must already be normalised by the caller.
+func SetProjectRepoPath(ctx context.Context, tx *sql.Tx, m Meta, id int64, path string) (domain.Project, error) {
+	if err := m.check(); err != nil {
+		return domain.Project{}, err
+	}
+	p, err := GetProject(ctx, tx, id)
+	if err != nil {
+		return domain.Project{}, err
+	}
+	if p.RepoPath == path {
+		return p, nil
+	}
+	var val any
+	if path != "" {
+		val = path
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE projects SET repo_path = ?, updated_at = ? WHERE id = ?`, val, formatTime(m.now()), id); err != nil {
+		return domain.Project{}, mapErr(err)
+	}
+	if _, err := appendEvent(ctx, tx, m, id, domain.EntityProject, id, domain.EventProjectUpdated, map[string]any{"repo_path": path, "previous_repo_path": p.RepoPath}); err != nil {
+		return domain.Project{}, err
+	}
+	return GetProject(ctx, tx, id)
+}

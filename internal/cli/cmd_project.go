@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 
@@ -20,7 +21,7 @@ func slugify(name string) string {
 
 func newProjectCmd(a *app) *cobra.Command {
 	return group("project", "Create and inspect projects",
-		newProjectCreateCmd(a), newProjectListCmd(a), newProjectShowCmd(a), newProjectArchiveCmd(a))
+		newProjectCreateCmd(a), newProjectListCmd(a), newProjectShowCmd(a), newProjectArchiveCmd(a), newProjectLinkCmd(a))
 }
 
 func newProjectCreateCmd(a *app) *cobra.Command {
@@ -197,4 +198,44 @@ func newProjectArchiveCmd(a *app) *cobra.Command {
 			})
 		}),
 	}
+}
+
+func newProjectLinkCmd(a *app) *cobra.Command {
+	var repo string
+	var unlink bool
+	c := &cobra.Command{
+		Use:   "link [slug]",
+		Short: "Link a project to a repository directory (default: the current directory)",
+		Args:  rangeArgs(0, 1),
+		RunE: a.do(func(e *env, c *cobra.Command, args []string) error {
+			if unlink && repo != "" {
+				return usagef("--unlink and --repo cannot be used together")
+			}
+			refFromArg(e, args)
+			o, err := e.svc.GetProject(e.ctx, e.actor, e.ref)
+			if err != nil {
+				return err
+			}
+			target := repo
+			if !unlink && target == "" {
+				if target, err = os.Getwd(); err != nil {
+					return err
+				}
+			}
+			p, err := e.svc.LinkProject(e.ctx, e.actor, o.Project.ID, target)
+			if err != nil {
+				return err
+			}
+			return e.emit(toProject(p), func(w io.Writer) {
+				if p.RepoPath == "" {
+					fmt.Fprintf(w, "unlinked %s %s\n", projectID(p.ID), p.Slug)
+					return
+				}
+				fmt.Fprintf(w, "linked %s %s to %s\n", projectID(p.ID), p.Slug, p.RepoPath)
+			})
+		}),
+	}
+	c.Flags().StringVar(&repo, "repo", "", "repository directory to link (default: the current directory)")
+	c.Flags().BoolVar(&unlink, "unlink", false, "remove the repository link")
+	return c
 }
