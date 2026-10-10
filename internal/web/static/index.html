@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="skald-token" content="{{TOKEN}}">
+<meta name="skald-version" content="{{VERSION}}">
+<title>Skald</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+<script type="module" src="/static/app.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="bar">
+  <a class="wordmark" href="#/" aria-label="Skald, all projects">skald</a>
+  <nav aria-label="Main">
+    <a href="#/" data-nav="projects">Projects</a>
+    <a href="#/activity" data-nav="activity">Activity</a>
+  </nav>
+  <span id="live" class="live" role="status" data-state="connecting"><span class="live-dot" aria-hidden="true"></span><span id="live-text">Connecting</span></span>
+</header>
+<main id="main" tabindex="-1"><p class="muted pad">Loading…</p></main>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<noscript><p class="pad">The dashboard needs JavaScript. The same data is available with <code>skald status</code>.</p></noscript>
+</body>
+</html>

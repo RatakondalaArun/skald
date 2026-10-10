@@ -1,0 +1,499 @@
+package web
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"skald/internal/domain"
+	"skald/internal/service"
+)
+
+// webActor is who the dashboard acts as. It counts as a human (it cannot
+// force completion) and shows up separately from the CLI in the activity feed.
+const webActor domain.Actor = "human:web"
+
+const (
+	maxBoardTasks = 2000
+	boardPage     = service.MaxListLimit
+)
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeAPIError(w http.ResponseWriter, status int, kind, msg string) {
+	var b errorBody
+	b.Error.Kind, b.Error.Message = kind, msg
+	writeJSON(w, status, b)
+}
+
+// fail maps an error to a response. Domain errors carry a message that says
+// what to do next and are passed through; anything else is logged and replaced
+// by a generic message so internals do not leak.
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, context.Canceled) || r.Context().Err() != nil {
+		return // the client went away
+	}
+	var de domain.Error
+	if !errors.As(err, &de) {
+		s.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
+		writeAPIError(w, http.StatusInternalServerError, "internal", "Something went wrong inside skald. The details are in the skald serve log on stderr.")
+		return
+	}
+	status := http.StatusInternalServerError
+	switch de.Kind() {
+	case domain.KindNotFound:
+		status = http.StatusNotFound
+	case domain.KindValidation:
+		status = http.StatusBadRequest
+	case domain.KindConflict:
+		status = http.StatusConflict
+	case domain.KindInvalidTransition, domain.KindEvidenceRequired, domain.KindDependencyCycle:
+		status = http.StatusUnprocessableEntity
+	}
+	var b errorBody
+	b.Error.Kind, b.Error.Message = de.Kind().String(), de.Message()
+	var ce *domain.ConflictError
+	if errors.As(err, &ce) && ce.CurrentTask != nil {
+		t := taskOf(*ce.CurrentTask)
+		b.Error.CurrentTask = &t
+	}
+	if status == http.StatusInternalServerError {
+		s.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
+		b.Error.Message = "Something went wrong inside skald. The details are in the skald serve log on stderr."
+	}
+	writeJSON(w, status, b)
+}
+
+func ref(r *http.Request) service.ProjectRef { return service.ProjectRef{Slug: r.PathValue("slug")} }
+
+func intParam(r *http.Request, name string, def, min, max int) (int, error) {
+	v := r.URL.Query().Get(name)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < min || n > max {
+		return 0, &domain.ValidationError{Field: name, Problem: "must be a whole number from " + strconv.Itoa(min) + " to " + strconv.Itoa(max)}
+	}
+	return n, nil
+}
+
+func taskID(r *http.Request) (int64, error) {
+	return domain.ParseID(domain.EntityTask, r.PathValue("id"))
+}
+
+// ---- reads ----------------------------------------------------------------
+
+func (s *Server) apiProjects(w http.ResponseWriter, r *http.Request) {
+	list, err := s.cfg.Service.ListProjects(r.Context(), webActor, r.URL.Query().Get("archived") == "1")
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	out := make([]overviewDTO, 0, len(list))
+	for _, o := range list {
+		out = append(out, overviewDTO{
+			Project: projectOf(o.Project), Progress: progressOf(o.Progress.Progress),
+			Counts: statusCountsOf(o.Counts), Features: o.Features, Ready: o.Ready,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": out})
+}
+
+func (s *Server) apiProject(w http.ResponseWriter, r *http.Request) {
+	sum, err := s.cfg.Service.ProjectSummary(r.Context(), ref(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	features := make([]featureDTO, 0, len(sum.Features))
+	for _, f := range sum.Features {
+		features = append(features, featureDTO{
+			ID: domain.FormatID(domain.EntityFeature, f.Feature.ID), Title: f.Feature.Title,
+			Description: f.Feature.Description, Status: string(f.Status), Weight: f.Feature.Weight,
+			Position: f.Feature.Position, Progress: progressOf(f.Progress), Counts: countsOf(f.Counts), Counted: f.Counted,
+		})
+	}
+	type blockedDTO struct {
+		Task   taskDTO `json:"task"`
+		Reason string  `json:"reason"`
+	}
+	blocked := make([]blockedDTO, 0, len(sum.Blocked))
+	for _, b := range sum.Blocked {
+		blocked = append(blocked, blockedDTO{taskOf(b.Task), b.Reason})
+	}
+	docs := make([]documentDTO, 0, len(sum.Documents))
+	for _, d := range sum.Documents {
+		docs = append(docs, documentOf(d))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project":     projectOf(sum.Project),
+		"progress":    progressOf(sum.Progress),
+		"counts":      countsOf(sum.Counts),
+		"ready_count": sum.ReadyCount,
+		"features":    features,
+		"blocked":     blocked,
+		"stale":       tasksOf(sum.Stale),
+		"documents":   docs,
+	})
+}
+
+func (s *Server) apiFeatures(w http.ResponseWriter, r *http.Request) {
+	list, err := s.cfg.Service.ListFeatures(r.Context(), webActor, ref(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	out := make([]featureDTO, 0, len(list))
+	for _, f := range list {
+		out = append(out, featureDTO{
+			ID: domain.FormatID(domain.EntityFeature, f.Feature.ID), Title: f.Feature.Title,
+			Description: f.Feature.Description, Status: string(f.Feature.Status), Weight: f.Feature.Weight,
+			Position: f.Feature.Position, Progress: progressOf(f.Progress), Counts: statusCountsOf(f.Counts), Counted: true,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"features": out})
+}
+
+// allTasks pages through ListTasks. The second result says the cap was hit.
+func (s *Server) allTasks(ctx context.Context, ref service.ProjectRef, f service.ListTasksFilter) ([]domain.Task, bool, error) {
+	var all []domain.Task
+	for off := 0; ; off += boardPage {
+		f.Limit, f.Offset = boardPage, off
+		page, err := s.cfg.Service.ListTasks(ctx, webActor, ref, f)
+		if err != nil {
+			return nil, false, err
+		}
+		all = append(all, page.Tasks...)
+		if !page.Truncated {
+			return all, false, nil
+		}
+		if len(all) >= maxBoardTasks {
+			return all, true, nil
+		}
+	}
+}
+
+// apiBoard returns every task of a project (priority order), with ready flags
+// and the stale set, for the board and the progress strip.
+func (s *Server) apiBoard(w http.ResponseWriter, r *http.Request) {
+	rf := ref(r)
+	tasks, capped, err := s.allTasks(r.Context(), rf, service.ListTasksFilter{})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	ready, _, err := s.allTasks(r.Context(), rf, service.ListTasksFilter{ReadyOnly: true})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	prog, err := s.cfg.Service.ProjectProgress(r.Context(), rf)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	isReady := make(map[int64]bool, len(ready))
+	for _, t := range ready {
+		isReady[t.ID] = true
+	}
+	isStale := make(map[int64]bool, len(prog.Stale))
+	for _, t := range prog.Stale {
+		isStale[t.ID] = true
+	}
+	out := make([]taskDTO, 0, len(tasks))
+	for _, t := range tasks {
+		d := taskOf(t)
+		d.Description, d.AcceptanceCriteria = "", "" // the board does not need the long text
+		d.Ready, d.Stale = isReady[t.ID], isStale[t.ID]
+		out = append(out, d)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"project": prog.Project.Slug, "tasks": out, "capped": capped})
+}
+
+func (s *Server) apiTasks(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := service.ListTasksFilter{ReadyOnly: q.Get("ready") == "1"}
+	var err error
+	if f.Limit, err = intParam(r, "limit", 0, 0, service.MaxListLimit); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if f.Offset, err = intParam(r, "offset", 0, 0, 1_000_000); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if v := q.Get("feature"); v != "" {
+		if f.FeatureID, err = domain.ParseID(domain.EntityFeature, v); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	for _, st := range strings.Split(q.Get("status"), ",") {
+		if st = strings.TrimSpace(st); st == "" {
+			continue
+		}
+		ts := domain.TaskStatus(st)
+		if !ts.Valid() {
+			s.fail(w, r, &domain.ValidationError{Field: "status", Problem: "unknown status " + strconv.Quote(st) + "; use todo, in_progress, blocked, done or cancelled"})
+			return
+		}
+		f.Statuses = append(f.Statuses, ts)
+	}
+	list, err := s.cfg.Service.ListTasks(r.Context(), webActor, ref(r), f)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasksOf(list.Tasks), "truncated": list.Truncated})
+}
+
+func (s *Server) apiTask(w http.ResponseWriter, r *http.Request) {
+	id, err := taskID(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	d, err := s.cfg.Service.GetTask(r.Context(), webActor, ref(r), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	type linkDTO struct {
+		ID     string `json:"id"`
+		Title  string `json:"title"`
+		Status string `json:"status"`
+	}
+	link := func(ts []domain.Task) []linkDTO {
+		out := make([]linkDTO, 0, len(ts))
+		for _, t := range ts {
+			out = append(out, linkDTO{domain.FormatID(domain.EntityTask, t.ID), t.Title, string(t.Status)})
+		}
+		return out
+	}
+	arts := make([]artifactDTO, 0, len(d.Artifacts))
+	for _, a := range d.Artifacts {
+		arts = append(arts, artifactDTO{domain.FormatID(domain.EntityArtifact, a.ID), string(a.Kind), a.Ref, a.Summary, string(a.Actor), ts(a.CreatedAt)})
+	}
+	slug := r.PathValue("slug")
+	events := make([]eventDTO, 0, len(d.RecentEvents))
+	for _, e := range d.RecentEvents {
+		events = append(events, s.enrich.event(r.Context(), e))
+	}
+	unmet := make([]string, 0, len(d.UnmetDependencies))
+	for _, u := range d.UnmetDependencies {
+		unmet = append(unmet, domain.FormatID(domain.EntityTask, u))
+	}
+	task := taskOf(d.Task)
+	task.Ready, task.Stale = d.Ready, d.Stale
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project":      slug,
+		"task":         task,
+		"feature":      map[string]string{"id": domain.FormatID(domain.EntityFeature, d.Feature.ID), "title": d.Feature.Title},
+		"dependencies": link(d.Dependencies),
+		"dependents":   link(d.Dependents),
+		"unmet":        unmet,
+		"artifacts":    arts,
+		"events":       events,
+	})
+}
+
+func (s *Server) apiNext(w http.ResponseWriter, r *http.Request) {
+	limit, err := intParam(r, "limit", service.DefaultNextLimit, 1, service.MaxNextLimit)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	res, err := s.cfg.Service.NextTasks(r.Context(), ref(r), limit)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasksOf(res.Tasks), "total": res.Total, "truncated": res.Truncated})
+}
+
+func (s *Server) apiDocuments(w http.ResponseWriter, r *http.Request) {
+	list, err := s.cfg.Service.ListDocuments(r.Context(), ref(r), r.URL.Query().Get("kind"))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	out := make([]documentDTO, 0, len(list))
+	for _, d := range list {
+		out = append(out, documentOf(d))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"documents": out})
+}
+
+func (s *Server) apiDocument(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	version, err := intParam(r, "version", 0, 0, 1_000_000)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	d, v, err := s.cfg.Service.GetDocument(r.Context(), ref(r), q.Get("kind"), q.Get("title"), version)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"document": documentOf(d), "version": v.Version, "body": v.Body,
+		"actor": string(v.Actor), "created_at": ts(v.CreatedAt),
+	})
+}
+
+// apiProjectEvents and apiEvents serve the change feed. With ?cursor= they
+// page forward from that event id; without it they return the most recent
+// events (oldest first within the page).
+func (s *Server) apiProjectEvents(w http.ResponseWriter, r *http.Request) {
+	s.events(w, r, r.PathValue("slug"))
+}
+func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
+	s.events(w, r, r.URL.Query().Get("project"))
+}
+
+func (s *Server) events(w http.ResponseWriter, r *http.Request, slug string) {
+	ctx := r.Context()
+	var projectID int64
+	if slug != "" {
+		p, err := s.cfg.Service.ResolveProject(ctx, service.ProjectRef{Slug: slug})
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		projectID = p.ID
+	}
+	limit, err := intParam(r, "limit", 50, 1, service.MaxEventLimit)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var (
+		evs    []domain.Event
+		cursor int64
+		more   bool
+	)
+	if v := r.URL.Query().Get("cursor"); v != "" {
+		c, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || c < 0 {
+			s.fail(w, r, &domain.ValidationError{Field: "cursor", Problem: "must be an event id of 0 or more"})
+			return
+		}
+		page, err := s.cfg.Service.EventsSince(ctx, projectID, c, limit)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		evs, cursor, more = page.Events, page.Cursor, page.More
+	} else if evs, cursor, err = s.recentEvents(ctx, projectID, limit); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	out := make([]eventDTO, 0, len(evs))
+	for _, e := range evs {
+		out = append(out, s.enrich.event(ctx, e))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": out, "cursor": cursor, "more": more})
+}
+
+// recentEvents returns the last n events of a project. EventsSince only pages
+// forward, so it starts a window back from the newest id and widens it until
+// enough events are found or the log's start is reached.
+func (s *Server) recentEvents(ctx context.Context, projectID int64, n int) ([]domain.Event, int64, error) {
+	latest, err := s.cfg.Service.LatestEventID(ctx, projectID)
+	if err != nil {
+		return nil, 0, err
+	}
+	window := int64(n) * 4
+	for {
+		start := latest - window
+		if start < 0 {
+			start = 0
+		}
+		var got []domain.Event
+		cur := start
+		for {
+			page, err := s.cfg.Service.EventsSince(ctx, projectID, cur, service.MaxEventLimit)
+			if err != nil {
+				return nil, 0, err
+			}
+			got = append(got, page.Events...)
+			cur = page.Cursor
+			if !page.More {
+				break
+			}
+		}
+		if len(got) >= n || start == 0 {
+			if len(got) > n {
+				got = got[len(got)-n:]
+			}
+			return got, latest, nil
+		}
+		window *= 4
+	}
+}
+
+// ---- writes ---------------------------------------------------------------
+
+type actionBody struct {
+	ExpectedVersion int64 `json:"expected_version"`
+}
+
+// apiTaskAction handles the three changes the dashboard may make: unblock,
+// cancel and reopen. Everything else is done with the CLI or by the agent.
+func (s *Server) apiTaskAction(action string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := taskID(r)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		var body actionBody
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			s.fail(w, r, &domain.ValidationError{Field: "body", Problem: "must be JSON like {\"expected_version\": 3}"})
+			return
+		}
+		if body.ExpectedVersion < 0 {
+			s.fail(w, r, &domain.ValidationError{Field: "expected_version", Problem: "must be 0 or more"})
+			return
+		}
+		// Reading the task first confirms it belongs to this project and, for
+		// unblock, tells whether it was ever started.
+		d, err := s.cfg.Service.GetTask(r.Context(), webActor, ref(r), id)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		var to domain.TaskStatus
+		switch action {
+		case "unblock":
+			to = domain.TaskTodo
+			if d.Task.StartedAt != nil {
+				to = domain.TaskInProgress
+			}
+		case "cancel":
+			to = domain.TaskCancelled
+		default:
+			to = domain.TaskTodo
+		}
+		t, err := s.cfg.Service.UpdateTaskStatus(r.Context(), webActor, id, service.StatusChange{To: to, ExpectedVersion: body.ExpectedVersion})
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"task": taskOf(t)})
+	}
+}

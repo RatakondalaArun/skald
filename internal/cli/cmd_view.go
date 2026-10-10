@@ -47,17 +47,25 @@ func newNextCmd(a *app) *cobra.Command {
 }
 
 func newStatusCmd(a *app) *cobra.Command {
-	return &cobra.Command{
+	var watchFlag bool
+	c := &cobra.Command{
 		Use:   "status",
 		Short: "Show progress, blockers and what is ready",
-		Args:  noArgs,
+		Long: `Shows project progress, blockers and what is ready.
+
+With --watch the view redraws whenever the project changes, including changes
+made by other processes such as Claude Code through MCP. Press Ctrl-C to exit.
+When stdout is not a terminal, each new snapshot is printed in turn, separated
+by a blank line.`,
+		Args: noArgs,
 		RunE: a.do(func(e *env, c *cobra.Command, _ []string) error {
-			rep, err := e.svc.ProjectProgress(e.ctx, e.ref)
-			if err != nil {
-				return err
+			if watchFlag {
+				if e.json {
+					return usagef("--watch cannot be combined with --json")
+				}
+				return watchStatus(e)
 			}
-			// Same project, resolved explicitly so both reads agree on it.
-			ready, err := e.svc.NextTasks(e.ctx, service.ProjectRef{Slug: rep.Project.Slug}, 10)
+			rep, ready, err := loadStatus(e, e.ref)
 			if err != nil {
 				return err
 			}
@@ -92,6 +100,19 @@ func newStatusCmd(a *app) *cobra.Command {
 			return e.emit(out, func(w io.Writer) { writeStatus(w, rep, ready) })
 		}),
 	}
+	c.Flags().BoolVar(&watchFlag, "watch", false, "redraw whenever the project changes (Ctrl-C to exit)")
+	return c
+}
+
+// loadStatus reads the progress report and the ready list. The ready list is
+// read for the project the report resolved, so both agree on it.
+func loadStatus(e *env, ref service.ProjectRef) (service.ProgressReport, service.NextTasksResult, error) {
+	rep, err := e.svc.ProjectProgress(e.ctx, ref)
+	if err != nil {
+		return rep, service.NextTasksResult{}, err
+	}
+	ready, err := e.svc.NextTasks(e.ctx, service.ProjectRef{Slug: rep.Project.Slug}, 10)
+	return rep, ready, err
 }
 
 func writeStatus(w io.Writer, rep service.ProgressReport, ready service.NextTasksResult) {
@@ -143,15 +164,21 @@ func writeStatus(w io.Writer, rep service.ProgressReport, ready service.NextTask
 func newLogCmd(a *app) *cobra.Command {
 	var limit int
 	var since int64
-	var allProjects bool
+	var allProjects, follow bool
 	c := &cobra.Command{
 		Use:   "log",
 		Short: "Show recent activity",
 		Long: `Shows the project's change history, oldest first. Without --since it shows the
 latest --limit events. With --since N it shows events after cursor N, so a
-script can page through the log: the last event's id is the next cursor.`,
+script can page through the log: the last event's id is the next cursor.
+
+With --follow it keeps running and prints new events as they are written, by
+this or any other process (like tail -f). It first shows the latest --limit
+events, or every event after --since. With --json each event is one JSON
+object per line. Press Ctrl-C to stop.`,
 		Example: `  skald log --limit 20
-  skald log --since 120 --json`,
+  skald log --since 120 --json
+  skald log --follow`,
 		Args: noArgs,
 		RunE: a.do(func(e *env, c *cobra.Command, _ []string) error {
 			if limit <= 0 {
@@ -164,6 +191,9 @@ script can page through the log: the last event's id is the next cursor.`,
 					return err
 				}
 				pid = o.Project.ID
+			}
+			if follow {
+				return followLog(e, pid, since, c.Flags().Changed("since"), limit)
 			}
 			var events []domain.Event
 			var cursor int64
@@ -210,6 +240,7 @@ script can page through the log: the last event's id is the next cursor.`,
 	c.Flags().IntVar(&limit, "limit", 30, "maximum events (max 1000)")
 	c.Flags().Int64Var(&since, "since", 0, "show events after this cursor (an event id)")
 	c.Flags().BoolVar(&allProjects, "all-projects", false, "show events of every project")
+	c.Flags().BoolVarP(&follow, "follow", "f", false, "keep running and print new events as they happen (Ctrl-C to stop)")
 	return c
 }
 

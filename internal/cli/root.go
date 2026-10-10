@@ -60,6 +60,7 @@ func NewRootCmd() *cobra.Command {
 		newLogCmd(a),
 		newBackupCmd(a),
 		newMCPCmd(a),
+		newServeCmd(a),
 	)
 	return root
 }
