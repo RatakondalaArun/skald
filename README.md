@@ -25,7 +25,12 @@ On macOS a downloaded binary may be quarantined. If it will not run, clear the f
 
 ```sh
 make build        # writes ./skald
+make install      # builds and installs to ~/.local/bin/skald (no sudo)
+make update       # git pull --ff-only, then reinstall
+make uninstall    # removes the binary; your data in ~/.skald is kept
 ```
+
+`make install` puts the binary in `$(PREFIX)/bin`, with `PREFIX` defaulting to `~/.local`. For a system-wide install use `sudo make install PREFIX=/usr/local`, and pass the same `PREFIX` to `update` and `uninstall`. Make sure the bin directory is on your `PATH`. `make update` refuses a dirty working tree (use `make update UPDATE_PULL=0` to rebuild the current checkout), and afterwards you should restart any running `skald mcp` (restart Claude Code) and `skald serve`. `make uninstall` never deletes `~/.skald`; remove that directory yourself to delete all projects, and run `claude mcp remove skald` if you registered the MCP server.
 
 `go install` does not work: the module path is `skald`, not a fetchable import path.
 
@@ -196,6 +201,7 @@ make test     # go test ./...
 make lint     # go vet ./...
 make bench    # multi-process write benchmark (docs/BENCHMARKS.md)
 make conc     # multi-process concurrency test
+make install  # also: make update, make uninstall (see Install)
 ```
 
 `make release` builds the release archives. See [docs/RELEASING.md](docs/RELEASING.md).
