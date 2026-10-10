@@ -7,7 +7,7 @@ Skald is a local-first project tracker for coding agents. Claude Code plans a pr
 - The CLI, the MCP server and the dashboard all use the same database and the same rules, so they always agree.
 - Progress is computed from task state and weights. Nobody, including an agent, can set a percentage.
 
-> **Status:** the MCP server is tested with in-process and pipe clients, and the tests drive full plan-to-done sessions. A real Claude Code session has **not** yet been verified end to end. Expect to tune tool descriptions after you try it.
+> **Status:** the MCP server is tested with in-process and pipe clients, and the tests drive full plan-to-done sessions. It has also been driven by two real headless Claude Code sessions (`claude -p`): one planned and built a small Python CLI to 100% with evidence on every task, the other deliberately hit the dependency, evidence and cycle errors and recovered using only the error text. Both ran on a temporary data directory. Interactive use over long sessions is not yet covered.
 
 ## Install
 

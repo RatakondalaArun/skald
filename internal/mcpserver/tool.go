@@ -48,10 +48,30 @@ func (s *server) toolErr(tool string, err error) error {
 	var de domain.Error
 	if errors.As(err, &de) {
 		s.log.Debug("tool error", "tool", tool, "kind", de.Kind().String())
-		return errors.New(de.Message())
+		return errors.New(agentMessage(de))
 	}
 	s.log.Error("tool failed", "tool", tool, "err", err)
 	return fmt.Errorf("internal error in %s: %v. Retry the call; if it keeps failing, check that the skald database is reachable (run `skald status`)", tool, err)
+}
+
+// agentMessage words a domain error for an agent caller. The domain messages
+// also serve humans, so the human-only override is dropped and the next tool
+// to call is named.
+func agentMessage(de domain.Error) string {
+	msg := de.Message()
+	switch e := de.(type) {
+	case *domain.EvidenceRequiredError:
+		task := "The task"
+		if e.TaskID != 0 {
+			task = tid(e.TaskID)
+		}
+		return task + " cannot be marked done without verification evidence. Call record_verification (commit, pr, test_report, link or manual) for it, then complete it again, or use report_task_result with evidence in one call."
+	case *domain.InvalidTransitionError:
+		if len(e.UnmetDeps) > 0 {
+			return msg + " Call get_next_tasks to see which tasks are ready now."
+		}
+	}
+	return msg
 }
 
 // ---- ids -------------------------------------------------------------
