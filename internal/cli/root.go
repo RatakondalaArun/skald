@@ -9,6 +9,9 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"skald/internal/config"
+	"skald/internal/store"
 )
 
 // Version is set at build time with -ldflags "-X skald/internal/cli.Version=...".
@@ -58,7 +61,7 @@ func NewRootCmd() *cobra.Command {
 		newNextCmd(a),
 		newStatusCmd(a),
 		newLogCmd(a),
-		newBackupCmd(a),
+		newBackupCmd(a), newExportCmd(a), newImportCmd(a), newDoctorCmd(a),
 		newMCPCmd(a),
 		newServeCmd(a),
 	)
@@ -79,10 +82,19 @@ func run(root *cobra.Command, stderr io.Writer) int {
 	if err == nil {
 		return exitOK
 	}
+	var se silentError
+	if errors.As(err, &se) {
+		return exitError
+	}
 	var ue *usageError
 	if errors.As(err, &ue) {
 		fmt.Fprintf(stderr, "skald: %s\nRun 'skald --help' for usage.\n", err)
 		return exitUsage
+	}
+	// Safety net: turn raw driver failures that escaped the store (reads on the
+	// reader pool, for example) into the recovery messages.
+	if path, perr := config.DBPath(); perr == nil {
+		err = store.Classify(path, err)
 	}
 	fmt.Fprintf(stderr, "skald: %s\n", err)
 	return exitError

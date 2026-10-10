@@ -47,6 +47,11 @@ func NormalizeRepoPath(path string) (string, error) {
 //
 // Otherwise it returns a ValidationError that lists the candidate slugs.
 func (s *Service) ResolveProject(ctx context.Context, ref ProjectRef) (domain.Project, error) {
+	p, err := s.resolveProject(ctx, ref)
+	return p, store.Classify(s.db.Path(), err)
+}
+
+func (s *Service) resolveProject(ctx context.Context, ref ProjectRef) (domain.Project, error) {
 	db := s.db.Reader()
 
 	if slug := strings.TrimSpace(ref.Slug); slug != "" {

@@ -65,5 +65,6 @@ func (s *Service) ListDocuments(ctx context.Context, ref ProjectRef, kind string
 	if err != nil {
 		return nil, err
 	}
-	return store.ListDocuments(ctx, s.db.Reader(), p.ID, strings.TrimSpace(kind))
+	docs, err := store.ListDocuments(ctx, s.db.Reader(), p.ID, strings.TrimSpace(kind))
+	return docs, store.Classify(s.db.Path(), err)
 }

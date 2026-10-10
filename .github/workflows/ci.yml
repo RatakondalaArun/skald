@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Test (race)
+        # The concurrency test has its own step below, with a race-built binary.
+        run: go test -race -skip TestConcurrency ./...
+      - name: Concurrency test (race-built binary)
+        run: make conc
+        env:
+          SKALD_CONC_RACE: "1"
+          SKALD_CONC_CYCLES: "8"

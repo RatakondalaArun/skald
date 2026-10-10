@@ -39,7 +39,7 @@ func (s *Service) EventsSince(ctx context.Context, projectID, cursor int64, limi
 	// Ask for one extra event to learn whether another page exists.
 	events, err := store.EventsSince(ctx, s.db.Reader(), projectID, cursor, limit+1)
 	if err != nil {
-		return EventPage{}, err
+		return EventPage{}, store.Classify(s.db.Path(), err)
 	}
 	page := EventPage{Cursor: cursor}
 	if len(events) > limit {
@@ -55,5 +55,6 @@ func (s *Service) EventsSince(ctx context.Context, projectID, cursor int64, limi
 // LatestEventID returns the newest event ID, or 0 when there are none. A
 // projectID of 0 means every project.
 func (s *Service) LatestEventID(ctx context.Context, projectID int64) (int64, error) {
-	return store.MaxEventID(ctx, s.db.Reader(), projectID)
+	id, err := store.MaxEventID(ctx, s.db.Reader(), projectID)
+	return id, store.Classify(s.db.Path(), err)
 }

@@ -13,6 +13,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// busyTimeoutMS is how long a connection waits for a lock. Tests shorten it.
+var busyTimeoutMS = 5000
+
 // DB wraps a single-connection writer pool and a multi-connection reader pool
 // over one SQLite file.
 type DB struct {
@@ -25,12 +28,12 @@ type DB struct {
 // the writer and reader pools, and applies pending migrations.
 func Open(ctx context.Context, path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("create database dir: %w", err)
+		return nil, Classify(path, fmt.Errorf("create database dir: %w", err))
 	}
 	// Create the file with 0600 before SQLite does it with the umask default.
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("create database file: %w", err)
+		return nil, Classify(path, fmt.Errorf("create database file: %w", err))
 	}
 	f.Close()
 
@@ -49,7 +52,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	db := &DB{path: path, writer: w, reader: r}
 	if err := db.migrate(ctx); err != nil {
 		db.Close()
-		return nil, err
+		return nil, Classify(path, err)
 	}
 	return db, nil
 }
@@ -57,7 +60,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 func openPool(path string, writer bool) (*sql.DB, error) {
 	q := url.Values{}
 	for _, p := range []string{
-		"busy_timeout(5000)", // first, so later pragmas (journal_mode) wait on locks
+		fmt.Sprintf("busy_timeout(%d)", busyTimeoutMS), // first, so later pragmas (journal_mode) wait on locks
 		"journal_mode(WAL)",
 		"foreign_keys(1)",
 		"synchronous(NORMAL)",
@@ -99,7 +102,7 @@ func (d *DB) Close() error {
 func (d *DB) WriteTx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	tx, err := d.writer.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin write tx: %w", err)
+		return Classify(d.path, fmt.Errorf("begin write tx: %w", err))
 	}
 	defer func() {
 		if p := recover(); p != nil {
@@ -111,10 +114,10 @@ func (d *DB) WriteTx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 		}
 	}()
 	if err = fn(tx); err != nil {
-		return err
+		return Classify(d.path, err)
 	}
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit write tx: %w", err)
+		return Classify(d.path, fmt.Errorf("commit write tx: %w", err))
 	}
 	return nil
 }

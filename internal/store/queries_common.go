@@ -153,10 +153,10 @@ func mapErr(err error) error {
 func (d *DB) ReadTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := d.reader.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin read tx: %w", err)
+		return Classify(d.path, fmt.Errorf("begin read tx: %w", err))
 	}
 	defer tx.Rollback()
-	return fn(tx)
+	return Classify(d.path, fn(tx))
 }
 
 func validateRange(field string, v, lo, hi int) error {

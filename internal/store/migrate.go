@@ -65,6 +65,18 @@ func (d *DB) migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// An up-to-date database needs no write lock to open, so another process
+	// holding a long write does not block read-only commands.
+	if v, err := d.SchemaVersion(ctx); err == nil {
+		if v > len(ms) {
+			return &SchemaTooNewError{DBVersion: v, BinaryVersion: len(ms)}
+		}
+		if v == len(ms) {
+			return nil
+		}
+	} else if c := sqliteCode(err); c == sqliteCorrupt || c == sqliteNotADB {
+		return err
+	}
 	for {
 		applied, err := d.applyNextRetry(ctx, ms)
 		if err != nil {
@@ -76,10 +88,13 @@ func (d *DB) migrate(ctx context.Context) error {
 	}
 }
 
+// migrateRetryWindow bounds how long a first open retries a busy database.
+var migrateRetryWindow = 10 * time.Second
+
 // applyNextRetry retries on SQLITE_BUSY. Concurrent first opens race on the
 // one-time switch to WAL mode, where the busy timeout is not always honoured.
 func (d *DB) applyNextRetry(ctx context.Context, ms []migration) (bool, error) {
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(migrateRetryWindow)
 	for {
 		applied, err := d.applyNext(ctx, ms)
 		if err == nil || !isBusy(err) || time.Now().After(deadline) {
@@ -91,11 +106,6 @@ func (d *DB) applyNextRetry(ctx context.Context, ms []migration) (bool, error) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-}
-
-func isBusy(err error) bool {
-	s := err.Error()
-	return strings.Contains(s, "SQLITE_BUSY") || strings.Contains(s, "database is locked")
 }
 
 func (d *DB) applyNext(ctx context.Context, ms []migration) (bool, error) {
