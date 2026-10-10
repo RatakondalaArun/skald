@@ -3,3 +3,5 @@ skald
 *.db
 *.db-wal
 *.db-shm
+*.swp
+.*.swp

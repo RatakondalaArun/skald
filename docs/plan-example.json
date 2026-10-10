@@ -1,0 +1,38 @@
+{
+  "features": [
+    {
+      "title": "Authentication",
+      "description": "Sign in and out",
+      "weight": 3,
+      "tasks": [
+        {
+          "ref": "schema",
+          "title": "User table and migrations",
+          "acceptance_criteria": "Migration applies and rolls back cleanly",
+          "priority": 1,
+          "idempotency_key": "auth-schema"
+        },
+        {
+          "ref": "login",
+          "title": "Login endpoint",
+          "acceptance_criteria": "Bad passwords are rejected with 401",
+          "depends_on": ["schema"],
+          "idempotency_key": "auth-login"
+        }
+      ]
+    },
+    {
+      "title": "Dashboard",
+      "weight": 2,
+      "tasks": [
+        {
+          "ref": "ui",
+          "title": "Dashboard page",
+          "weight": 2,
+          "depends_on": ["login"],
+          "idempotency_key": "dash-ui"
+        }
+      ]
+    }
+  ]
+}

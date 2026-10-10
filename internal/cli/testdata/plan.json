@@ -1,0 +1,19 @@
+{
+  "features": [
+    {
+      "title": "Core",
+      "weight": 2,
+      "tasks": [
+        {"ref": "a", "title": "Task A", "priority": 0, "idempotency_key": "k-a"},
+        {"ref": "b", "title": "Task B", "depends_on": ["a"], "idempotency_key": "k-b"},
+        {"ref": "c", "title": "Task C", "depends_on": ["a"], "idempotency_key": "k-c"}
+      ]
+    },
+    {
+      "title": "Edge",
+      "tasks": [
+        {"ref": "d", "title": "Task D", "depends_on": ["b", "c"], "idempotency_key": "k-d"}
+      ]
+    }
+  ]
+}

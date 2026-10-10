@@ -190,7 +190,7 @@ func (e *EvidenceRequiredError) Message() string {
 	if e.TaskID != 0 {
 		task = FormatID(EntityTask, e.TaskID)
 	}
-	return fmt.Sprintf("%s cannot be marked done without verification evidence. Record an artifact (commit, PR, test report, link or manual note) first, then complete it again. A human can override this with the force option.", task)
+	return fmt.Sprintf("%s cannot be marked done without verification evidence. Record an artifact (commit, PR, test report, link or manual note) first, then complete it again. A human can override this with `skald task done --force`.", task)
 }
 
 // ValidationError means input was malformed or out of range.

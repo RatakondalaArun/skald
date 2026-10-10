@@ -1,0 +1,11 @@
+{
+  "features": [
+    {
+      "title": "Loop",
+      "tasks": [
+        {"ref": "x", "title": "X", "depends_on": ["y"]},
+        {"ref": "y", "title": "Y", "depends_on": ["x"]}
+      ]
+    }
+  ]
+}
