@@ -1,4 +1,5 @@
 skald
+!cmd/**
 /dist/
 *.db
 *.db-wal
