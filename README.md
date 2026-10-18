@@ -2,7 +2,7 @@
 
 Skald is a local-first project tracker for coding agents. Claude Code plans a project, splits it into features and tasks, and reports progress through MCP. You watch from the CLI or a web dashboard.
 
-- One Go binary, `skald`. No cloud, no accounts, no agent runtime.
+- One Go binary, `skald`. No cloud, no accounts, no agent runtime. GitHub sync is opt-in and runs only when you ask for it.
 - State lives in a single SQLite database at `~/.skald/skald.db`. Set `SKALD_HOME` to use another directory.
 - The CLI, the MCP server and the dashboard all use the same database and the same rules, so they always agree.
 - Progress is computed from task state and weights. Nobody, including an agent, can set a percentage.
@@ -124,6 +124,7 @@ IDs are short IDs (`T-42`, `F-7`). Every tool except `create_project` takes an o
 | `record_verification` | Attach evidence: commit, pr, test_report, link or manual |
 | `report_task_result` | Note, evidence and done in one step. Nothing is written if it fails |
 | `get_document`, `put_document` | Versioned requirements, architecture, decisions, conventions |
+| `sync_github` | Pull milestones, issues, merged PRs and discussions from GitHub (see below) |
 
 There is also an MCP prompt, `skald_workflow`, that describes the loop.
 
@@ -138,6 +139,35 @@ There is also an MCP prompt, `skald_workflow`, that describes the loop.
 
 By default a task cannot be completed without at least one evidence item. Agents cannot override this: the MCP tools do not expose `force`, and the service refuses it for agent actors. A human can complete a task anyway with `skald task done T-5 --force`. The override is recorded in the task's history.
 
+## Work alongside GitHub
+
+Skald can mirror a GitHub repository, so issues, milestones and pull requests stay the place your team works while Claude tracks progress in Skald.
+
+```sh
+skald github link acme/rocket           # or no argument: use the checkout's origin remote
+skald github sync --dry-run             # show what would change, write nothing
+skald github sync                       # pull
+skald github sync --push                # pull, then close issues finished in Skald
+```
+
+| GitHub | Skald |
+|---|---|
+| Milestone (with issues) | Feature. Issues without a milestone go to "No milestone" |
+| Issue | Task titled `#12 Title`, with the idempotency key `github:owner/name#12` |
+| Merged PR linked to close the issue | `pr` evidence on the task |
+| Issue closed as completed / not planned | Task done / cancelled |
+| Open linked PR, or board Status "In progress" / "In review" | Task started |
+| Board Status "Blocked" | Task blocked (cleared again when the board moves on) |
+| Labels `P0`..`P3`, `priority: high` | Task priority |
+| Discussions | Read-only list in the document `github` / `Discussions` |
+
+- Re-running is safe: nothing is created twice, and a sync with no changes on GitHub writes nothing. Titles, descriptions and features of synced tasks follow GitHub, so edit those on GitHub.
+- The evidence gate still applies. A closed issue completes its task with the merged PRs as evidence, or with a `link` to the closed issue when there is none. Nothing is forced, and a task whose dependencies are unfinished is skipped and reported.
+- GitHub never reopens a task. A task finished in Skald whose issue is still open is reported, and `--push` closes the issue with a comment that lists the evidence. Nothing is written to GitHub without `--push`.
+- The token comes from `GITHUB_TOKEN`, `GH_TOKEN` or the GitHub CLI (`gh auth login`). It needs read access to issues, pull requests and discussions, and write access to issues for `--push`. Board status needs the `read:project` scope (`gh auth refresh -s read:project`); without it the sync still runs and says it skipped the boards. For GitHub Enterprise set `SKALD_GITHUB_API_URL=https://<host>/api/v3`.
+- Agents can run the same sync with the `sync_github` MCP tool, and the dashboard shows a "Sync from GitHub" button and each task's issue link once a project is linked.
+- This is the only feature that uses the network, and only when you run a sync.
+
 ## CLI reference
 
 Global flags: `--json` (JSON output on read commands), `-p, --project <slug>`. Set `SKALD_ACTOR` to change who is recorded as the actor (default `human`).
@@ -151,6 +181,7 @@ Global flags: `--json` (JSON output on read commands), `-p, --project <slug>`. S
 | `task start\|done\|block\|unblock\|cancel\|reopen` | Move a task through its lifecycle (`block` needs `--reason`; `done` takes `--force`, `--note`) |
 | `task note`, `task edit`, `task dep add\|remove` | Notes, edits (title, description, criteria, priority, weight) and dependencies |
 | `plan import <file\|->` | Import a JSON plan |
+| `github link [owner/name] [--unlink]`, `github sync [--repo] [--push] [--dry-run]` | Link a GitHub repository and sync it (see above) |
 | `evidence add <task>` | Attach evidence (`--kind`, `--ref`, `--summary`) |
 | `next` | Tasks that can start now |
 | `status [--watch]` | Progress, blockers, ready and stale tasks |
@@ -191,6 +222,7 @@ internal/watch       event-cursor poller
 internal/cli         commands
 internal/mcpserver   MCP tools over stdio
 internal/web         HTTP API, SSE, embedded dashboard
+internal/github      GitHub API client used by the sync
 ```
 
 ## Development

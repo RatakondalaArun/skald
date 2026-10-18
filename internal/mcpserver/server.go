@@ -72,6 +72,7 @@ func newServer(svc *service.Service, c config) *mcp.Server {
 	s.registerRead(srv)
 	s.registerWrite(srv)
 	s.registerWork(srv)
+	s.registerGitHub(srv)
 	s.registerPrompts(srv)
 	return srv
 }

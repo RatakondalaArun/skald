@@ -215,7 +215,25 @@ function toast(msg, isErr = false) {
 
 const DONE_WORD = { unblock: 'unblocked', cancel: 'cancelled', reopen: 'reopened', start: 'started', edit: 'updated', 'dep-add': 'dependency added', 'dep-remove': 'dependency removed', done: 'marked done', block: 'blocked', note: 'note added', evidence: 'evidence added' };
 
+async function githubSync() {
+  st.busy = true;
+  render();
+  try {
+    const r = await api(`/api/projects/${enc(route.slug)}/github/sync`, { method: 'POST', body: JSON.stringify({}) });
+    const parts = [`Synced ${r.repo}: ${r.tasks_created} new, ${r.tasks_updated} updated, ${r.status_changes} status changes`];
+    if (r.skipped.length) parts.push(`${r.skipped.length} skipped`);
+    if (r.diverged.length) parts.push(`${r.diverged.length} finished here but open on GitHub`);
+    toast(parts.join(', ') + '.');
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    st.busy = false;
+  }
+  await refresh({ hard: true });
+}
+
 async function taskAction(action, t, extra) {
+  if (action === 'github-sync') { await githubSync(); return; }
   if (action === 'cancel-ask') { st.confirmCancel = true; render(); return; }
   if (action === 'cancel-no') { st.confirmCancel = false; render(); return; }
   if (action === 'form') {
