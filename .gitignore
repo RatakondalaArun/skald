@@ -6,3 +6,4 @@ skald
 *.db-shm
 *.swp
 .*.swp
+!internal/store/testdata/*.db
