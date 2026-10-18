@@ -20,6 +20,7 @@ func (wtGitHub) FetchRepo(context.Context, github.Repo) (github.Snapshot, error)
 	return github.Snapshot{Issues: []github.Issue{{Number: 9, Title: "Dark mode", State: "OPEN", URL: "https://github.com/acme/rocket/issues/9"}}}, nil
 }
 func (wtGitHub) CloseIssue(context.Context, github.Repo, int, string, string) error { return nil }
+func (wtGitHub) CloseMilestone(context.Context, github.Repo, int) error             { return nil }
 
 func TestGitHubSyncEndpoint(t *testing.T) {
 	db, err := store.Open(wtCtx, filepath.Join(t.TempDir(), "skald.db"))

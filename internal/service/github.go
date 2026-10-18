@@ -21,6 +21,7 @@ import (
 type GitHubAPI interface {
 	FetchRepo(ctx context.Context, repo github.Repo) (github.Snapshot, error)
 	CloseIssue(ctx context.Context, repo github.Repo, number int, reason, comment string) error
+	CloseMilestone(ctx context.Context, repo github.Repo, number int) error
 }
 
 // WithGitHub replaces how a sync gets its GitHub client. The default reads
@@ -159,7 +160,8 @@ type GitHubSyncOptions struct {
 	// Repo overrides the linked repository ("owner/name"). A real sync stores
 	// it as the project's link.
 	Repo string
-	// Push closes GitHub issues whose tasks are done or cancelled in Skald.
+	// Push closes GitHub issues whose tasks are done or cancelled in Skald,
+	// then milestones whose features are done.
 	Push bool
 	// DryRun reads GitHub and reports what would change without writing to
 	// the database or to GitHub.
@@ -194,6 +196,13 @@ type GitHubSyncResult struct {
 	Pushed []GitHubIssueNote
 	// PushFailed lists issues the push could not close.
 	PushFailed []GitHubIssueNote
+	// MilestonesDiverged lists open milestones whose features are done in
+	// Skald. A sync with Push closes them, once their open issues are closed.
+	MilestonesDiverged []GitHubMilestoneNote
+	// MilestonesPushed lists milestones closed on GitHub (or that would be, on
+	// a dry run); MilestonesPushFailed those the push could not close.
+	MilestonesPushed     []GitHubMilestoneNote
+	MilestonesPushFailed []GitHubMilestoneNote
 	// Warnings are things the sync could not read; the rest went ahead.
 	Warnings []string
 }
@@ -204,6 +213,16 @@ type GitHubStatusChange struct {
 	Issue  int
 	From   domain.TaskStatus
 	To     domain.TaskStatus
+}
+
+// GitHubMilestoneNote ties a milestone to its feature.
+type GitHubMilestoneNote struct {
+	Milestone int
+	Title     string
+	FeatureID int64
+	Note      string
+
+	openIssues []int // still open on GitHub when the sync read it
 }
 
 // GitHubIssueNote ties an issue to a task with a short explanation.
@@ -410,6 +429,33 @@ func (s *Service) applyGitHub(ctx context.Context, tx *sql.Tx, m store.Meta, pro
 		}
 		if _, err := tx.ExecContext(ctx, `RELEASE gh_issue`); err != nil {
 			return err
+		}
+	}
+
+	// Open milestones whose features are now done here.
+	open := map[int][]int{}
+	for _, is := range snap.Issues {
+		if !is.Closed() {
+			open[is.Milestone] = append(open[is.Milestone], is.Number)
+		}
+	}
+	for _, ms := range snap.Milestones {
+		fid, ok := featureOf[strconv.Itoa(ms.Number)]
+		if !ok || strings.EqualFold(ms.State, "CLOSED") {
+			continue
+		}
+		f, err := store.GetFeature(ctx, tx, fid)
+		if err != nil {
+			return err
+		}
+		tasks, err := store.ListTasks(ctx, tx, store.TaskFilter{ProjectID: projectID, FeatureID: fid})
+		if err != nil {
+			return err
+		}
+		if domain.DeriveFeatureStatus(f.Status, tasks) == domain.FeatureDone {
+			res.MilestonesDiverged = append(res.MilestonesDiverged, GitHubMilestoneNote{
+				Milestone: ms.Number, Title: ms.Title, FeatureID: fid, Note: "done here, open on GitHub", openIssues: open[ms.Number],
+			})
 		}
 	}
 
@@ -739,5 +785,38 @@ func (s *Service) pushGitHub(ctx context.Context, actor domain.Actor, api GitHub
 			_, err := store.AddTaskNote(ctx, tx, s.meta(actor), d.TaskID, fmt.Sprintf("Closed %s#%d on GitHub as %s", repo, d.Issue, strings.ReplaceAll(reason, "_", " ")))
 			return err
 		})
+	}
+
+	// Milestones last, and only once none of their issues is left open.
+	closed := map[int]bool{}
+	for _, p := range res.Pushed {
+		closed[p.Issue] = true
+	}
+	milestones := res.MilestonesDiverged
+	res.MilestonesDiverged = nil
+	for _, ms := range milestones {
+		var left []string
+		for _, n := range ms.openIssues {
+			if !closed[n] {
+				left = append(left, fmt.Sprintf("#%d", n))
+			}
+		}
+		if len(left) > 0 {
+			ms.Note = "not closed: " + strings.Join(left, ", ") + " still open on GitHub"
+			res.MilestonesDiverged = append(res.MilestonesDiverged, ms)
+			continue
+		}
+		if res.DryRun {
+			ms.Note = "would be closed"
+			res.MilestonesPushed = append(res.MilestonesPushed, ms)
+			continue
+		}
+		if err := api.CloseMilestone(ctx, repo, ms.Milestone); err != nil {
+			ms.Note = githubErr(err).Error()
+			res.MilestonesPushFailed = append(res.MilestonesPushFailed, ms)
+			continue
+		}
+		ms.Note = "closed"
+		res.MilestonesPushed = append(res.MilestonesPushed, ms)
 	}
 }

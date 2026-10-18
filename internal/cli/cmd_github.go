@@ -27,7 +27,8 @@ or a link to the closed issue, are recorded first.
 
 GitHub never reopens a task. A task finished in Skald whose issue is still open
 is reported; --push closes that issue on GitHub with a comment listing the
-evidence.
+evidence (as not planned for a cancelled task). It then closes each open
+milestone whose feature is done here, once none of its issues is left open.
 
 The repository is --repo, else the project's link (skald github link), else the
 origin remote of the project's directory. The token comes from GITHUB_TOKEN,
@@ -88,7 +89,7 @@ tasks stay as they are.`,
 		}),
 	}
 	sync.Flags().StringVar(&o.Repo, "repo", "", "owner/name (default: the project's link, then the git origin)")
-	sync.Flags().BoolVar(&o.Push, "push", false, "close GitHub issues whose tasks are done or cancelled here")
+	sync.Flags().BoolVar(&o.Push, "push", false, "close GitHub issues whose tasks are done or cancelled here, and milestones whose features are done")
 	sync.Flags().BoolVar(&o.DryRun, "dry-run", false, "show what would change without writing anything")
 
 	return group("github", "Sync with GitHub issues, milestones, pull requests and discussions", link, sync)
@@ -126,6 +127,26 @@ type githubSyncJSON struct {
 	Pushed          []githubNoteJSON   `json:"pushed"`
 	PushFailed      []githubNoteJSON   `json:"push_failed"`
 	Warnings        []string           `json:"warnings"`
+	MilestonePush   struct {
+		Diverged   []githubMilestoneJSON `json:"diverged"`
+		Pushed     []githubMilestoneJSON `json:"pushed"`
+		PushFailed []githubMilestoneJSON `json:"push_failed"`
+	} `json:"milestone_push"`
+}
+
+type githubMilestoneJSON struct {
+	Milestone int    `json:"milestone"`
+	Title     string `json:"title"`
+	Feature   string `json:"feature"`
+	Note      string `json:"note"`
+}
+
+func toGitHubMilestones(ms []service.GitHubMilestoneNote) []githubMilestoneJSON {
+	out := make([]githubMilestoneJSON, len(ms))
+	for i, m := range ms {
+		out[i] = githubMilestoneJSON{Milestone: m.Milestone, Title: m.Title, Feature: featureID(m.FeatureID), Note: m.Note}
+	}
+	return out
 }
 
 func toGitHubNotes(ns []service.GitHubIssueNote) []githubNoteJSON {
@@ -150,6 +171,9 @@ func toGitHubSync(r service.GitHubSyncResult) githubSyncJSON {
 		Pushed: toGitHubNotes(r.Pushed), PushFailed: toGitHubNotes(r.PushFailed),
 		Warnings: append([]string{}, r.Warnings...),
 	}
+	j.MilestonePush.Diverged = toGitHubMilestones(r.MilestonesDiverged)
+	j.MilestonePush.Pushed = toGitHubMilestones(r.MilestonesPushed)
+	j.MilestonePush.PushFailed = toGitHubMilestones(r.MilestonesPushFailed)
 	for i, c := range r.StatusChanges {
 		j.StatusChanges[i] = githubChangeJSON{Issue: c.Issue, Task: taskID(c.TaskID), From: string(c.From), To: string(c.To)}
 	}
@@ -195,4 +219,16 @@ func printGitHubSync(w io.Writer, r service.GitHubSyncResult) {
 	if len(r.Diverged) > 0 {
 		notes("finished here but open on GitHub (sync with --push to close them):", r.Diverged)
 	}
+	milestones := func(title string, ms []service.GitHubMilestoneNote) {
+		if len(ms) == 0 {
+			return
+		}
+		fmt.Fprintln(w, title)
+		for _, m := range ms {
+			fmt.Fprintf(w, "  milestone %d %q (%s): %s\n", m.Milestone, m.Title, featureID(m.FeatureID), m.Note)
+		}
+	}
+	milestones("milestones pushed to GitHub:", r.MilestonesPushed)
+	milestones("milestone push failed:", r.MilestonesPushFailed)
+	milestones("milestones done here but open on GitHub:", r.MilestonesDiverged)
 }

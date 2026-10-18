@@ -351,3 +351,9 @@ func (c *Client) CloseIssue(ctx context.Context, repo Repo, number int, reason, 
 	}
 	return c.do(ctx, http.MethodPatch, base, map[string]string{"state": "closed", "state_reason": reason}, nil)
 }
+
+// CloseMilestone closes a milestone.
+func (c *Client) CloseMilestone(ctx context.Context, repo Repo, number int) error {
+	url := fmt.Sprintf("%s/repos/%s/%s/milestones/%d", c.RESTURL, repo.Owner, repo.Name, number)
+	return c.do(ctx, http.MethodPatch, url, map[string]string{"state": "closed"}, nil)
+}

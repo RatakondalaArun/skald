@@ -711,6 +711,8 @@ func (s *Server) apiGitHubSync(w http.ResponseWriter, r *http.Request) {
 		"features_created": res.FeaturesCreated, "tasks_created": res.TasksCreated, "tasks_updated": res.TasksUpdated,
 		"evidence_added": res.EvidenceAdded, "status_changes": len(res.StatusChanges),
 		"skipped": note(res.Skipped), "diverged": note(res.Diverged), "pushed": note(res.Pushed), "push_failed": note(res.PushFailed),
-		"warnings": append([]string{}, res.Warnings...),
+		"warnings":            append([]string{}, res.Warnings...),
+		"milestones_pushed":   len(res.MilestonesPushed),
+		"milestones_diverged": len(res.MilestonesDiverged),
 	})
 }

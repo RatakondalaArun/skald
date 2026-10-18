@@ -187,3 +187,15 @@ func TestFetchRepoWithoutProjectScope(t *testing.T) {
 		t.Fatalf("snapshot: %+v", snap)
 	}
 }
+
+func TestCloseMilestone(t *testing.T) {
+	f := &fakeGitHub{}
+	ts := httptest.NewServer(f)
+	defer ts.Close()
+	if err := New("tok", ts.URL).CloseMilestone(context.Background(), Repo{"acme", "rocket"}, 3); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.rest) != 1 || f.rest[0] != `PATCH /repos/acme/rocket/milestones/3 {"state":"closed"}` {
+		t.Fatalf("calls: %q", f.rest)
+	}
+}

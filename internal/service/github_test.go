@@ -28,9 +28,24 @@ type ghClose struct {
 
 // ghFake is an in-memory GitHub.
 type ghFake struct {
-	snap     github.Snapshot
-	fetchErr error
-	closed   []ghClose
+	snap       github.Snapshot
+	fetchErr   error
+	closed     []ghClose
+	milestones []int // closed milestones
+	msErr      error
+}
+
+func (f *ghFake) CloseMilestone(_ context.Context, _ github.Repo, n int) error {
+	if f.msErr != nil {
+		return f.msErr
+	}
+	f.milestones = append(f.milestones, n)
+	for i := range f.snap.Milestones {
+		if f.snap.Milestones[i].Number == n {
+			f.snap.Milestones[i].State = "CLOSED"
+		}
+	}
+	return nil
 }
 
 func (f *ghFake) FetchRepo(_ context.Context, repo github.Repo) (github.Snapshot, error) {
@@ -452,5 +467,58 @@ func TestGitHubLinkSurvivesExport(t *testing.T) {
 	gh := x.Projects[0].Settings.GitHub
 	if gh == nil || gh.Repo != "Acme/Rocket" || len(gh.Milestones) != 3 {
 		t.Fatalf("exported settings: %+v", x.Projects[0].Settings)
+	}
+}
+
+func TestGitHubSyncPushClosesDoneMilestones(t *testing.T) {
+	e := ghNew(t)
+	e.sync(t, GitHubSyncOptions{})
+	// v1.0 (milestone 1) holds #1 (done) and #2 (in progress). Finish #2 here.
+	t2 := e.task(t, 2)
+	if _, _, err := e.svc.ReportTaskResult(ghCtx, domain.Human, t2.ID, TaskResult{Artifacts: []ArtifactInput{{Kind: domain.ArtifactCommit, Ref: "beef123"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	res := e.sync(t, GitHubSyncOptions{})
+	if len(res.MilestonesDiverged) != 1 || res.MilestonesDiverged[0].Milestone != 1 || len(e.fake.milestones) != 0 {
+		t.Fatalf("without push: %+v", res.MilestonesDiverged)
+	}
+
+	res = e.sync(t, GitHubSyncOptions{Push: true, DryRun: true})
+	if len(res.MilestonesPushed) != 1 || res.MilestonesPushed[0].Note != "would be closed" || len(e.fake.milestones)+len(e.fake.closed) != 0 {
+		t.Fatalf("dry run: %+v", res)
+	}
+
+	res = e.sync(t, GitHubSyncOptions{Push: true})
+	if len(res.Pushed) != 1 || res.Pushed[0].Issue != 2 {
+		t.Fatalf("issue push: %+v", res.Pushed)
+	}
+	if len(res.MilestonesPushed) != 1 || len(e.fake.milestones) != 1 || e.fake.milestones[0] != 1 || len(res.MilestonesDiverged) != 0 {
+		t.Fatalf("milestone push: %+v %v", res, e.fake.milestones)
+	}
+	// v2.0 still has open work and stays open; nothing is left to push.
+	if res := e.sync(t, GitHubSyncOptions{Push: true}); len(res.MilestonesPushed)+len(res.MilestonesDiverged) != 0 {
+		t.Fatalf("second push: %+v", res)
+	}
+}
+
+func TestGitHubSyncReportsMilestonePushFailure(t *testing.T) {
+	e := ghNew(t)
+	// #2 is synced done, reopened on GitHub, then cancelled here, so its
+	// milestone (v1.0) is done here while #2 is open on GitHub.
+	e.fake.snap.Issues[1].State = "CLOSED"
+	e.sync(t, GitHubSyncOptions{})
+	e.fake.snap.Issues[1].State = "OPEN"
+	e.fake.snap.Issues[1].PullRequests = nil
+	if _, err := e.svc.UpdateTaskStatus(ghCtx, domain.Human, e.task(t, 2).ID, StatusChange{To: domain.TaskTodo}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.UpdateTaskStatus(ghCtx, domain.Human, e.task(t, 2).ID, StatusChange{To: domain.TaskCancelled}); err != nil {
+		t.Fatal(err)
+	}
+	e.fake.msErr = &github.APIError{Status: 403, Message: "nope"}
+	res := e.sync(t, GitHubSyncOptions{Push: true})
+	if len(res.Pushed) != 1 || len(res.MilestonesPushFailed) != 1 || !strings.Contains(res.MilestonesPushFailed[0].Note, "403") {
+		t.Fatalf("push: %+v", res)
 	}
 }
