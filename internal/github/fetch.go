@@ -351,3 +351,49 @@ func (c *Client) CloseIssue(ctx context.Context, repo Repo, number int, reason, 
 	}
 	return c.do(ctx, http.MethodPatch, base, map[string]string{"state": "closed", "state_reason": reason}, nil)
 }
+
+// CloseMilestone closes a milestone.
+func (c *Client) CloseMilestone(ctx context.Context, repo Repo, number int) error {
+	url := fmt.Sprintf("%s/repos/%s/%s/milestones/%d", c.RESTURL, repo.Owner, repo.Name, number)
+	return c.do(ctx, http.MethodPatch, url, map[string]string{"state": "closed"}, nil)
+}
+
+// CreateMilestone creates a milestone and returns its number.
+func (c *Client) CreateMilestone(ctx context.Context, repo Repo, title, description string) (int, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/milestones", c.RESTURL, repo.Owner, repo.Name)
+	body := map[string]string{"title": title}
+	if description != "" {
+		body["description"] = description
+	}
+	var out struct {
+		Number int `json:"number"`
+	}
+	err := c.do(ctx, http.MethodPost, url, body, &out)
+	return out.Number, err
+}
+
+// NewIssue is an issue to create. Milestone 0 means none.
+type NewIssue struct {
+	Title     string
+	Body      string
+	Milestone int
+	Labels    []string
+}
+
+// CreateIssue creates an issue and returns its number and URL.
+func (c *Client) CreateIssue(ctx context.Context, repo Repo, in NewIssue) (int, string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/issues", c.RESTURL, repo.Owner, repo.Name)
+	body := map[string]any{"title": in.Title, "body": in.Body}
+	if in.Milestone != 0 {
+		body["milestone"] = in.Milestone
+	}
+	if len(in.Labels) > 0 {
+		body["labels"] = in.Labels
+	}
+	var out struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+	}
+	err := c.do(ctx, http.MethodPost, url, body, &out)
+	return out.Number, out.HTMLURL, err
+}

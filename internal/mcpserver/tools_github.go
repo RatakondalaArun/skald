@@ -11,16 +11,17 @@ import (
 
 type syncGitHubArgs struct {
 	projectArg
-	Repo   string `json:"repo,omitempty" jsonschema:"owner/name; omit to use the project's link or the repo's git origin"`
-	Push   bool   `json:"push,omitempty" jsonschema:"also close GitHub issues whose tasks are done or cancelled here"`
-	DryRun bool   `json:"dry_run,omitempty" jsonschema:"report what would change without writing anything"`
+	Repo         string `json:"repo,omitempty" jsonschema:"owner/name; omit to use the project's link or the repo's git origin"`
+	Push         bool   `json:"push,omitempty" jsonschema:"also close GitHub issues whose tasks are done or cancelled here, and milestones whose features are done"`
+	CreateIssues bool   `json:"create_issues,omitempty" jsonschema:"create GitHub issues and milestones for tasks and features that have none"`
+	DryRun       bool   `json:"dry_run,omitempty" jsonschema:"report what would change without writing anything"`
 }
 
 func (s *server) registerGitHub(srv *mcp.Server) {
 	addTool(srv, s, "sync_github",
-		"Pull GitHub milestones (features), issues (tasks), merged PRs (evidence) and discussions into the project. Safe to repeat. Closed issues complete tasks through the evidence gate. push closes issues finished here. Next: get_project_progress.",
+		"Pull GitHub milestones (features), issues (tasks), merged PRs (evidence) and discussions into the project. Safe to repeat. Closed issues complete tasks through the evidence gate. push closes issues finished here and milestones whose features are done; create_issues creates issues for tasks that have none. Next: get_project_progress.",
 		false, func(ctx context.Context, actor domain.Actor, in syncGitHubArgs) (any, error) {
-			res, err := s.svc.SyncGitHub(ctx, actor, s.ref(in.Project), service.GitHubSyncOptions{Repo: in.Repo, Push: in.Push, DryRun: in.DryRun})
+			res, err := s.svc.SyncGitHub(ctx, actor, s.ref(in.Project), service.GitHubSyncOptions{Repo: in.Repo, Push: in.Push, CreateIssues: in.CreateIssues, DryRun: in.DryRun})
 			if err != nil {
 				return nil, err
 			}
@@ -43,7 +44,7 @@ func (s *server) registerGitHub(srv *mcp.Server) {
 				o["status_changes"] = ch
 			}
 			for key, ns := range map[string][]service.GitHubIssueNote{
-				"skipped": res.Skipped, "diverged": res.Diverged, "pushed": res.Pushed, "push_failed": res.PushFailed,
+				"skipped": res.Skipped, "diverged": res.Diverged, "created": res.Created, "create_failed": res.CreateFailed, "pushed": res.Pushed, "push_failed": res.PushFailed,
 			} {
 				if len(ns) == 0 {
 					continue
@@ -54,6 +55,18 @@ func (s *server) registerGitHub(srv *mcp.Server) {
 					if n.TaskID != 0 {
 						out[i]["task"] = tid(n.TaskID)
 					}
+				}
+				o[key] = out
+			}
+			for key, ms := range map[string][]service.GitHubMilestoneNote{
+				"milestones_created": res.MilestonesCreated, "milestones_diverged": res.MilestonesDiverged, "milestones_pushed": res.MilestonesPushed, "milestones_push_failed": res.MilestonesPushFailed,
+			} {
+				if len(ms) == 0 {
+					continue
+				}
+				out := make([]obj, len(ms))
+				for i, m := range ms {
+					out[i] = obj{"milestone": m.Milestone, "title": m.Title, "feature": fid(m.FeatureID), "note": m.Note}
 				}
 				o[key] = out
 			}

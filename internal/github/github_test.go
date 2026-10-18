@@ -187,3 +187,45 @@ func TestFetchRepoWithoutProjectScope(t *testing.T) {
 		t.Fatalf("snapshot: %+v", snap)
 	}
 }
+
+func TestCloseMilestone(t *testing.T) {
+	f := &fakeGitHub{}
+	ts := httptest.NewServer(f)
+	defer ts.Close()
+	if err := New("tok", ts.URL).CloseMilestone(context.Background(), Repo{"acme", "rocket"}, 3); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.rest) != 1 || f.rest[0] != `PATCH /repos/acme/rocket/milestones/3 {"state":"closed"}` {
+		t.Fatalf("calls: %q", f.rest)
+	}
+}
+
+func TestCreateIssueAndMilestone(t *testing.T) {
+	var got []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = append(got, r.Method+" "+r.URL.Path+" "+string(b))
+		if strings.HasSuffix(r.URL.Path, "/milestones") {
+			_, _ = io.WriteString(w, `{"number":7}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"number":42,"html_url":"https://github.com/acme/rocket/issues/42"}`)
+	}))
+	defer ts.Close()
+	c := New("tok", ts.URL)
+	ms, err := c.CreateMilestone(context.Background(), Repo{"acme", "rocket"}, "Auth", "")
+	if err != nil || ms != 7 {
+		t.Fatalf("milestone: %d %v", ms, err)
+	}
+	n, url, err := c.CreateIssue(context.Background(), Repo{"acme", "rocket"}, NewIssue{Title: "Login", Body: "b", Milestone: 7, Labels: []string{"P1"}})
+	if err != nil || n != 42 || url != "https://github.com/acme/rocket/issues/42" {
+		t.Fatalf("issue: %d %s %v", n, url, err)
+	}
+	want := []string{
+		`POST /repos/acme/rocket/milestones {"title":"Auth"}`,
+		`POST /repos/acme/rocket/issues {"body":"b","labels":["P1"],"milestone":7,"title":"Login"}`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("calls:\n%s", strings.Join(got, "\n"))
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,9 +29,41 @@ type ghClose struct {
 
 // ghFake is an in-memory GitHub.
 type ghFake struct {
-	snap     github.Snapshot
-	fetchErr error
-	closed   []ghClose
+	snap       github.Snapshot
+	fetchErr   error
+	closed     []ghClose
+	milestones []int // closed milestones
+	msErr      error
+	createErr  error
+}
+
+func (f *ghFake) CreateMilestone(_ context.Context, _ github.Repo, title, desc string) (int, error) {
+	n := 100 + len(f.snap.Milestones)
+	f.snap.Milestones = append(f.snap.Milestones, github.Milestone{Number: n, Title: title, Description: desc, State: "OPEN"})
+	return n, nil
+}
+
+func (f *ghFake) CreateIssue(_ context.Context, repo github.Repo, in github.NewIssue) (int, string, error) {
+	if f.createErr != nil {
+		return 0, "", f.createErr
+	}
+	n := 200 + len(f.snap.Issues)
+	url := fmt.Sprintf("https://github.com/%s/issues/%d", repo, n)
+	f.snap.Issues = append(f.snap.Issues, github.Issue{Number: n, Title: in.Title, Body: in.Body, State: "OPEN", URL: url, Milestone: in.Milestone, Labels: in.Labels})
+	return n, url, nil
+}
+
+func (f *ghFake) CloseMilestone(_ context.Context, _ github.Repo, n int) error {
+	if f.msErr != nil {
+		return f.msErr
+	}
+	f.milestones = append(f.milestones, n)
+	for i := range f.snap.Milestones {
+		if f.snap.Milestones[i].Number == n {
+			f.snap.Milestones[i].State = "CLOSED"
+		}
+	}
+	return nil
 }
 
 func (f *ghFake) FetchRepo(_ context.Context, repo github.Repo) (github.Snapshot, error) {
@@ -452,5 +485,140 @@ func TestGitHubLinkSurvivesExport(t *testing.T) {
 	gh := x.Projects[0].Settings.GitHub
 	if gh == nil || gh.Repo != "Acme/Rocket" || len(gh.Milestones) != 3 {
 		t.Fatalf("exported settings: %+v", x.Projects[0].Settings)
+	}
+}
+
+func TestGitHubSyncPushClosesDoneMilestones(t *testing.T) {
+	e := ghNew(t)
+	e.sync(t, GitHubSyncOptions{})
+	// v1.0 (milestone 1) holds #1 (done) and #2 (in progress). Finish #2 here.
+	t2 := e.task(t, 2)
+	if _, _, err := e.svc.ReportTaskResult(ghCtx, domain.Human, t2.ID, TaskResult{Artifacts: []ArtifactInput{{Kind: domain.ArtifactCommit, Ref: "beef123"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	res := e.sync(t, GitHubSyncOptions{})
+	if len(res.MilestonesDiverged) != 1 || res.MilestonesDiverged[0].Milestone != 1 || len(e.fake.milestones) != 0 {
+		t.Fatalf("without push: %+v", res.MilestonesDiverged)
+	}
+
+	res = e.sync(t, GitHubSyncOptions{Push: true, DryRun: true})
+	if len(res.MilestonesPushed) != 1 || res.MilestonesPushed[0].Note != "would be closed" || len(e.fake.milestones)+len(e.fake.closed) != 0 {
+		t.Fatalf("dry run: %+v", res)
+	}
+
+	res = e.sync(t, GitHubSyncOptions{Push: true})
+	if len(res.Pushed) != 1 || res.Pushed[0].Issue != 2 {
+		t.Fatalf("issue push: %+v", res.Pushed)
+	}
+	if len(res.MilestonesPushed) != 1 || len(e.fake.milestones) != 1 || e.fake.milestones[0] != 1 || len(res.MilestonesDiverged) != 0 {
+		t.Fatalf("milestone push: %+v %v", res, e.fake.milestones)
+	}
+	// v2.0 still has open work and stays open; nothing is left to push.
+	if res := e.sync(t, GitHubSyncOptions{Push: true}); len(res.MilestonesPushed)+len(res.MilestonesDiverged) != 0 {
+		t.Fatalf("second push: %+v", res)
+	}
+}
+
+func TestGitHubSyncReportsMilestonePushFailure(t *testing.T) {
+	e := ghNew(t)
+	// #2 is synced done, reopened on GitHub, then cancelled here, so its
+	// milestone (v1.0) is done here while #2 is open on GitHub.
+	e.fake.snap.Issues[1].State = "CLOSED"
+	e.sync(t, GitHubSyncOptions{})
+	e.fake.snap.Issues[1].State = "OPEN"
+	e.fake.snap.Issues[1].PullRequests = nil
+	if _, err := e.svc.UpdateTaskStatus(ghCtx, domain.Human, e.task(t, 2).ID, StatusChange{To: domain.TaskTodo}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.UpdateTaskStatus(ghCtx, domain.Human, e.task(t, 2).ID, StatusChange{To: domain.TaskCancelled}); err != nil {
+		t.Fatal(err)
+	}
+	e.fake.msErr = &github.APIError{Status: 403, Message: "nope"}
+	res := e.sync(t, GitHubSyncOptions{Push: true})
+	if len(res.Pushed) != 1 || len(res.MilestonesPushFailed) != 1 || !strings.Contains(res.MilestonesPushFailed[0].Note, "403") {
+		t.Fatalf("push: %+v", res)
+	}
+}
+
+func TestGitHubCreateIssuesForSkaldTasks(t *testing.T) {
+	e := ghNew(t)
+	e.fake.snap = github.Snapshot{} // an empty repository
+	prio := 0
+	plan, err := e.svc.CreatePlan(ghCtx, domain.Human, e.ref, PlanInput{Features: []PlanFeature{
+		{Title: "Auth", Description: "sign in", Tasks: []PlanTask{
+			{Ref: "a", Title: "Schema", Description: "Create tables", Priority: &prio, IdempotencyKey: "auth-schema"},
+			{Ref: "b", Title: "Login"},
+			{Ref: "c", Title: "Dropped"},
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b, c := plan.Tasks["a"].TaskID, plan.Tasks["b"].TaskID, plan.Tasks["c"].TaskID
+	if _, err := e.svc.UpdateTaskStatus(ghCtx, domain.Human, c, StatusChange{To: domain.TaskCancelled}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.StartTask(ghCtx, domain.Human, b, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.svc.ReportTaskResult(ghCtx, domain.Human, b, TaskResult{Artifacts: []ArtifactInput{{Kind: domain.ArtifactCommit, Ref: "abc1234"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A dry run creates nothing anywhere.
+	res := e.sync(t, GitHubSyncOptions{CreateIssues: true, Push: true, DryRun: true})
+	if len(res.Created) != 2 || len(res.MilestonesCreated) != 1 || len(e.fake.snap.Issues)+len(e.fake.snap.Milestones) != 0 {
+		t.Fatalf("dry run: %+v", res)
+	}
+
+	res = e.sync(t, GitHubSyncOptions{CreateIssues: true, Push: true})
+	if len(res.Created) != 2 || len(res.CreateFailed) != 0 || len(res.MilestonesCreated) != 1 || res.MilestonesCreated[0].Milestone != 100 {
+		t.Fatalf("create: %+v", res)
+	}
+	is := e.fake.snap.Issues
+	if len(is) != 2 || is[0].Title != "Schema" || is[0].Milestone != 100 || len(is[0].Labels) != 1 || is[0].Labels[0] != "P0" ||
+		!strings.Contains(is[0].Body, "Create tables") || !strings.Contains(is[0].Body, "<!-- skald:T-") {
+		t.Fatalf("issues: %+v", is)
+	}
+	// The done task's new issue was closed with its evidence.
+	if len(e.fake.closed) != 1 || e.fake.closed[0].Number != is[1].Number || !strings.Contains(e.fake.closed[0].Comment, "abc1234") {
+		t.Fatalf("closed: %+v", e.fake.closed)
+	}
+
+	// Pulling back links to the same tasks: nothing duplicated, no marker in
+	// the description, and creating again finds nothing to do.
+	res = e.sync(t, GitHubSyncOptions{CreateIssues: true, Push: true})
+	if res.TasksCreated != 0 || res.FeaturesCreated != 0 || len(res.Created)+len(res.MilestonesCreated) != 0 {
+		t.Fatalf("re-sync: %+v", res)
+	}
+	if got := e.count(t, `SELECT COUNT(*) FROM tasks`); got != 3 {
+		t.Fatalf("tasks = %d", got)
+	}
+	ta, _ := store.GetTask(ghCtx, e.db.Reader(), a)
+	if ta.Title != fmt.Sprintf("#%d Schema", is[0].Number) || ta.Description != "Create tables" || ta.IdempotencyKey != "auth-schema" {
+		t.Fatalf("task a after pull: %+v", ta)
+	}
+	if got := e.count(t, `SELECT COUNT(*) FROM features`); got != 1 {
+		t.Fatalf("features = %d", got)
+	}
+}
+
+func TestGitHubCreateIssuesFailureIsReportedAndRetried(t *testing.T) {
+	e := ghNew(t)
+	e.fake.snap = github.Snapshot{}
+	if _, err := e.svc.CreatePlan(ghCtx, domain.Human, e.ref, PlanInput{Features: []PlanFeature{{Title: "Ops", Tasks: []PlanTask{{Ref: "x", Title: "Backups"}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	e.fake.createErr = &github.APIError{Status: 403, Message: "no"}
+	res := e.sync(t, GitHubSyncOptions{CreateIssues: true})
+	if len(res.CreateFailed) != 1 || len(res.Created) != 0 {
+		t.Fatalf("failed create: %+v", res)
+	}
+	e.fake.createErr = nil
+	res = e.sync(t, GitHubSyncOptions{CreateIssues: true})
+	// The milestone was made on the first run and is reused.
+	if len(res.Created) != 1 || len(res.MilestonesCreated) != 0 || len(e.fake.snap.Milestones) != 1 {
+		t.Fatalf("retry: %+v", res)
 	}
 }

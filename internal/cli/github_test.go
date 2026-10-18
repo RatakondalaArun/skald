@@ -136,7 +136,11 @@ func TestCLIGitHubSync(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.stdout, "pushed to GitHub") {
 		t.Fatalf("push: %d\n%s\n%s", r.code, r.stdout, r.stderr)
 	}
-	if w := writes(); len(w) != 2 || w[0] != "POST /repos/acme/rocket/issues/2/comments" || w[1] != "PATCH /repos/acme/rocket/issues/2" {
+	if !strings.Contains(r.stdout, `milestone 1 "Launch"`) {
+		t.Fatalf("milestone push not reported:\n%s", r.stdout)
+	}
+	// The issue first, then its milestone, now that every task in it is done.
+	if w := writes(); len(w) != 3 || w[0] != "POST /repos/acme/rocket/issues/2/comments" || w[1] != "PATCH /repos/acme/rocket/issues/2" || w[2] != "PATCH /repos/acme/rocket/milestones/1" {
 		t.Fatalf("GitHub writes: %q", w)
 	}
 

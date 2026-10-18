@@ -21,6 +21,9 @@ import (
 type GitHubAPI interface {
 	FetchRepo(ctx context.Context, repo github.Repo) (github.Snapshot, error)
 	CloseIssue(ctx context.Context, repo github.Repo, number int, reason, comment string) error
+	CloseMilestone(ctx context.Context, repo github.Repo, number int) error
+	CreateMilestone(ctx context.Context, repo github.Repo, title, description string) (int, error)
+	CreateIssue(ctx context.Context, repo github.Repo, in github.NewIssue) (number int, url string, err error)
 }
 
 // WithGitHub replaces how a sync gets its GitHub client. The default reads
@@ -159,8 +162,13 @@ type GitHubSyncOptions struct {
 	// Repo overrides the linked repository ("owner/name"). A real sync stores
 	// it as the project's link.
 	Repo string
-	// Push closes GitHub issues whose tasks are done or cancelled in Skald.
+	// Push closes GitHub issues whose tasks are done or cancelled in Skald,
+	// then milestones whose features are done.
 	Push bool
+	// CreateIssues creates a GitHub issue for every task that has none (except
+	// cancelled ones), and a milestone for every feature that has none. Done
+	// tasks get their issue closed straight away when Push is also set.
+	CreateIssues bool
 	// DryRun reads GitHub and reports what would change without writing to
 	// the database or to GitHub.
 	DryRun bool
@@ -194,6 +202,19 @@ type GitHubSyncResult struct {
 	Pushed []GitHubIssueNote
 	// PushFailed lists issues the push could not close.
 	PushFailed []GitHubIssueNote
+	// MilestonesDiverged lists open milestones whose features are done in
+	// Skald. A sync with Push closes them, once their open issues are closed.
+	MilestonesDiverged []GitHubMilestoneNote
+	// MilestonesPushed lists milestones closed on GitHub (or that would be, on
+	// a dry run); MilestonesPushFailed those the push could not close.
+	MilestonesPushed     []GitHubMilestoneNote
+	MilestonesPushFailed []GitHubMilestoneNote
+	// Created lists issues created for Skald tasks (Issue is 0 on a dry run),
+	// CreateFailed the tasks whose issue could not be created.
+	Created      []GitHubIssueNote
+	CreateFailed []GitHubIssueNote
+	// MilestonesCreated lists milestones created for Skald features.
+	MilestonesCreated []GitHubMilestoneNote
 	// Warnings are things the sync could not read; the rest went ahead.
 	Warnings []string
 }
@@ -204,6 +225,16 @@ type GitHubStatusChange struct {
 	Issue  int
 	From   domain.TaskStatus
 	To     domain.TaskStatus
+}
+
+// GitHubMilestoneNote ties a milestone to its feature.
+type GitHubMilestoneNote struct {
+	Milestone int
+	Title     string
+	FeatureID int64
+	Note      string
+
+	openIssues []int // still open on GitHub when the sync read it
 }
 
 // GitHubIssueNote ties an issue to a task with a short explanation.
@@ -283,6 +314,11 @@ func (s *Service) SyncGitHub(ctx context.Context, actor domain.Actor, ref Projec
 		return GitHubSyncResult{}, err
 	}
 
+	if o.CreateIssues {
+		if err := s.createGitHubIssues(ctx, actor, api, p.ID, repo, &res); err != nil {
+			return res, err
+		}
+	}
 	if o.Push {
 		s.pushGitHub(ctx, actor, api, repo, &res)
 	}
@@ -310,6 +346,19 @@ func (s *Service) applyGitHub(ctx context.Context, tx *sql.Tx, m store.Meta, pro
 	if settings.GitHub != nil && strings.EqualFold(settings.GitHub.Repo, repo.String()) {
 		for k, v := range settings.GitHub.Milestones {
 			gh.Milestones[k] = v
+		}
+		if len(settings.GitHub.Issues) > 0 {
+			gh.Issues = map[string]int{}
+			for k, v := range settings.GitHub.Issues {
+				gh.Issues[k] = v
+			}
+		}
+	}
+	// Issues Skald created: issue number -> task.
+	linked := map[int]int64{}
+	for k, n := range gh.Issues {
+		if id, err := strconv.ParseInt(k, 10, 64); err == nil {
+			linked[n] = id
 		}
 	}
 
@@ -391,7 +440,7 @@ func (s *Service) applyGitHub(ctx context.Context, tx *sql.Tx, m store.Meta, pro
 			out    GitHubSyncResult
 			taskID int64
 		)
-		err := s.applyIssue(ctx, tx, m, project, repo, is, featureOf[strconv.Itoa(is.Milestone)], &out, &taskID)
+		err := s.applyIssue(ctx, tx, m, project, repo, is, featureOf[strconv.Itoa(is.Milestone)], linked[is.Number], &out, &taskID)
 		if err != nil {
 			if _, rerr := tx.ExecContext(ctx, `ROLLBACK TO gh_issue`); rerr != nil {
 				return rerr
@@ -410,6 +459,33 @@ func (s *Service) applyGitHub(ctx context.Context, tx *sql.Tx, m store.Meta, pro
 		}
 		if _, err := tx.ExecContext(ctx, `RELEASE gh_issue`); err != nil {
 			return err
+		}
+	}
+
+	// Open milestones whose features are now done here.
+	open := map[int][]int{}
+	for _, is := range snap.Issues {
+		if !is.Closed() {
+			open[is.Milestone] = append(open[is.Milestone], is.Number)
+		}
+	}
+	for _, ms := range snap.Milestones {
+		fid, ok := featureOf[strconv.Itoa(ms.Number)]
+		if !ok || strings.EqualFold(ms.State, "CLOSED") {
+			continue
+		}
+		f, err := store.GetFeature(ctx, tx, fid)
+		if err != nil {
+			return err
+		}
+		tasks, err := store.ListTasks(ctx, tx, store.TaskFilter{ProjectID: projectID, FeatureID: fid})
+		if err != nil {
+			return err
+		}
+		if domain.DeriveFeatureStatus(f.Status, tasks) == domain.FeatureDone {
+			res.MilestonesDiverged = append(res.MilestonesDiverged, GitHubMilestoneNote{
+				Milestone: ms.Number, Title: ms.Title, FeatureID: fid, Note: "done here, open on GitHub", openIssues: open[ms.Number],
+			})
 		}
 	}
 
@@ -439,14 +515,27 @@ func (s *Service) applyGitHub(ctx context.Context, tx *sql.Tx, m store.Meta, pro
 
 // applyIssue mirrors one issue onto its task. It sets *taskID as soon as the
 // task is known, so a skipped issue can still name its task.
-func (s *Service) applyIssue(ctx context.Context, tx *sql.Tx, m store.Meta, project domain.Project, repo github.Repo, is github.Issue, featureID int64, out *GitHubSyncResult, taskID *int64) error {
+//
+// linkedTask is the task Skald created this issue for (0 when none); it is
+// used instead of looking the task up by key.
+func (s *Service) applyIssue(ctx context.Context, tx *sql.Tx, m store.Meta, project domain.Project, repo github.Repo, is github.Issue, featureID, linkedTask int64, out *GitHubSyncResult, taskID *int64) error {
 	title := fmt.Sprintf("#%d %s", is.Number, strings.TrimSpace(is.Title))
-	desc := strings.TrimSpace(is.Body)
+	desc := strings.TrimSpace(skaldMarker.ReplaceAllString(is.Body, ""))
 	prio := priorityFromLabels(is.Labels)
-	task, created, err := store.CreateTask(ctx, tx, m, store.TaskInput{
-		ProjectID: project.ID, FeatureID: featureID, Title: title, Description: desc,
-		Priority: prio, IdempotencyKey: GitHubIssueKey(repo, is.Number),
-	})
+	var (
+		task    domain.Task
+		created bool
+		err     error
+	)
+	if linkedTask != 0 {
+		task, err = store.GetTaskInProject(ctx, tx, project.ID, linkedTask)
+	}
+	if linkedTask == 0 || domain.KindOf(err) == domain.KindNotFound {
+		task, created, err = store.CreateTask(ctx, tx, m, store.TaskInput{
+			ProjectID: project.ID, FeatureID: featureID, Title: title, Description: desc,
+			Priority: prio, IdempotencyKey: GitHubIssueKey(repo, is.Number),
+		})
+	}
 	if err != nil {
 		return err
 	}
@@ -610,6 +699,149 @@ func (s *Service) addPREvidence(ctx context.Context, tx *sql.Tx, m store.Meta, t
 	return nil
 }
 
+// skaldMarker is the hidden trailer Skald puts on the issues it creates. A
+// pull strips it so it never lands in the task's description.
+var skaldMarker = regexp.MustCompile(`\s*<!-- skald:T-\d+ -->\s*$`)
+
+func skaldMarkerFor(taskID int64) string {
+	return fmt.Sprintf("<!-- skald:%s -->", domain.FormatID(domain.EntityTask, taskID))
+}
+
+// createGitHubIssues creates an issue for every task with no GitHub issue,
+// and a milestone for every feature with none. Each link is saved as soon as
+// GitHub returns it, so a failure part-way never leads to duplicates.
+func (s *Service) createGitHubIssues(ctx context.Context, actor domain.Actor, api GitHubAPI, projectID int64, repo github.Repo, res *GitHubSyncResult) error {
+	var (
+		project  domain.Project
+		features []domain.Feature
+		tasks    []domain.Task
+	)
+	err := s.db.ReadTx(ctx, func(tx *sql.Tx) (err error) {
+		if project, err = store.GetProject(ctx, tx, projectID); err != nil {
+			return err
+		}
+		if features, err = store.ListFeatures(ctx, tx, projectID); err != nil {
+			return err
+		}
+		tasks, err = store.ListTasks(ctx, tx, store.TaskFilter{ProjectID: projectID})
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	gh := project.Settings.GitHub
+	if gh == nil || !strings.EqualFold(gh.Repo, repo.String()) {
+		// A dry run rolled the link back; nothing is linked yet.
+		gh = &domain.GitHubSettings{Repo: repo.String()}
+	}
+	milestoneOf := map[int64]int{} // feature -> milestone number
+	for k, fid := range gh.Milestones {
+		n, _ := strconv.Atoi(k)
+		milestoneOf[fid] = n
+	}
+	byFeature := map[int64][]domain.Task{}
+	for _, t := range tasks {
+		byFeature[t.FeatureID] = append(byFeature[t.FeatureID], t)
+	}
+
+	for _, f := range features {
+		if f.Status == domain.FeatureCancelled {
+			continue
+		}
+		var todo []domain.Task
+		for _, t := range byFeature[f.ID] {
+			// Tasks synced from any GitHub repository already have an issue.
+			if t.Status == domain.TaskCancelled || strings.HasPrefix(t.IdempotencyKey, "github:") || gh.Issues[strconv.FormatInt(t.ID, 10)] != 0 {
+				continue
+			}
+			todo = append(todo, t)
+		}
+		if len(todo) == 0 {
+			continue
+		}
+		ms, mapped := milestoneOf[f.ID]
+		if !mapped {
+			note := GitHubMilestoneNote{Title: f.Title, FeatureID: f.ID}
+			if res.DryRun {
+				note.Note = "would be created"
+				res.MilestonesCreated = append(res.MilestonesCreated, note)
+			} else {
+				n, err := api.CreateMilestone(ctx, repo, f.Title, f.Description)
+				if err != nil {
+					// Without the milestone the feature's tasks would land in
+					// none; report them and move on.
+					for _, t := range todo {
+						res.CreateFailed = append(res.CreateFailed, GitHubIssueNote{TaskID: t.ID, Note: "milestone for " + f.Title + ": " + githubErr(err).Error()})
+					}
+					continue
+				}
+				if err := s.saveGitHubLink(ctx, actor, projectID, repo, func(g *domain.GitHubSettings) { g.Milestones[strconv.Itoa(n)] = f.ID }); err != nil {
+					return err
+				}
+				ms, note.Milestone, note.Note = n, n, "created"
+				res.MilestonesCreated = append(res.MilestonesCreated, note)
+			}
+		}
+		for _, t := range todo {
+			in := github.NewIssue{Title: t.Title, Body: strings.TrimSpace(t.Description + "\n\n" + skaldMarkerFor(t.ID)), Milestone: ms}
+			if t.Priority != 2 {
+				in.Labels = []string{fmt.Sprintf("P%d", t.Priority)}
+			}
+			if res.DryRun {
+				res.Created = append(res.Created, GitHubIssueNote{TaskID: t.ID, Note: "would be created"})
+				continue
+			}
+			n, url, err := api.CreateIssue(ctx, repo, in)
+			if err != nil {
+				res.CreateFailed = append(res.CreateFailed, GitHubIssueNote{TaskID: t.ID, Note: githubErr(err).Error()})
+				continue
+			}
+			if err := s.saveGitHubLink(ctx, actor, projectID, repo, func(g *domain.GitHubSettings) { g.Issues[strconv.FormatInt(t.ID, 10)] = n }); err != nil {
+				return err
+			}
+			_ = s.db.WriteTx(ctx, func(tx *sql.Tx) error {
+				_, err := store.AddTaskNote(ctx, tx, s.meta(actor), t.ID, fmt.Sprintf("Created %s#%d on GitHub: %s", repo, n, url))
+				return err
+			})
+			res.Created = append(res.Created, GitHubIssueNote{Issue: n, TaskID: t.ID, Note: "created"})
+			if t.Status == domain.TaskDone {
+				res.Diverged = append(res.Diverged, GitHubIssueNote{Issue: n, TaskID: t.ID, Note: "done here, open on GitHub"})
+			}
+		}
+	}
+	return nil
+}
+
+// saveGitHubLink records part of the project's GitHub link in its own short
+// write transaction.
+func (s *Service) saveGitHubLink(ctx context.Context, actor domain.Actor, projectID int64, repo github.Repo, fn func(*domain.GitHubSettings)) error {
+	return s.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		p, err := store.GetProject(ctx, tx, projectID)
+		if err != nil {
+			return err
+		}
+		set := p.Settings
+		if set.GitHub == nil || !strings.EqualFold(set.GitHub.Repo, repo.String()) {
+			set.GitHub = &domain.GitHubSettings{Repo: repo.String()}
+		} else {
+			cp := *set.GitHub
+			set.GitHub = &cp
+		}
+		g := set.GitHub
+		ms, is := map[string]int64{}, map[string]int{}
+		for k, v := range g.Milestones {
+			ms[k] = v
+		}
+		for k, v := range g.Issues {
+			is[k] = v
+		}
+		g.Milestones, g.Issues = ms, is
+		fn(g)
+		_, err = store.UpdateProjectSettings(ctx, tx, s.meta(actor), projectID, set)
+		return err
+	})
+}
+
 func shortSHA(s string) string {
 	if len(s) > 7 {
 		return s[:7]
@@ -739,5 +971,38 @@ func (s *Service) pushGitHub(ctx context.Context, actor domain.Actor, api GitHub
 			_, err := store.AddTaskNote(ctx, tx, s.meta(actor), d.TaskID, fmt.Sprintf("Closed %s#%d on GitHub as %s", repo, d.Issue, strings.ReplaceAll(reason, "_", " ")))
 			return err
 		})
+	}
+
+	// Milestones last, and only once none of their issues is left open.
+	closed := map[int]bool{}
+	for _, p := range res.Pushed {
+		closed[p.Issue] = true
+	}
+	milestones := res.MilestonesDiverged
+	res.MilestonesDiverged = nil
+	for _, ms := range milestones {
+		var left []string
+		for _, n := range ms.openIssues {
+			if !closed[n] {
+				left = append(left, fmt.Sprintf("#%d", n))
+			}
+		}
+		if len(left) > 0 {
+			ms.Note = "not closed: " + strings.Join(left, ", ") + " still open on GitHub"
+			res.MilestonesDiverged = append(res.MilestonesDiverged, ms)
+			continue
+		}
+		if res.DryRun {
+			ms.Note = "would be closed"
+			res.MilestonesPushed = append(res.MilestonesPushed, ms)
+			continue
+		}
+		if err := api.CloseMilestone(ctx, repo, ms.Milestone); err != nil {
+			ms.Note = githubErr(err).Error()
+			res.MilestonesPushFailed = append(res.MilestonesPushFailed, ms)
+			continue
+		}
+		ms.Note = "closed"
+		res.MilestonesPushed = append(res.MilestonesPushed, ms)
 	}
 }

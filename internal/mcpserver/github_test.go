@@ -17,6 +17,13 @@ func (f *fakeGitHub) FetchRepo(context.Context, github.Repo) (github.Snapshot, e
 	return f.snap, nil
 }
 func (f *fakeGitHub) CloseIssue(context.Context, github.Repo, int, string, string) error { return nil }
+func (f *fakeGitHub) CloseMilestone(context.Context, github.Repo, int) error             { return nil }
+func (f *fakeGitHub) CreateMilestone(context.Context, github.Repo, string, string) (int, error) {
+	return 0, nil
+}
+func (f *fakeGitHub) CreateIssue(context.Context, github.Repo, github.NewIssue) (int, string, error) {
+	return 0, "", nil
+}
 
 func TestSyncGitHubTool(t *testing.T) {
 	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "skald.db"))
