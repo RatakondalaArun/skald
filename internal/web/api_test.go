@@ -417,3 +417,94 @@ func readAll(t *testing.T, res *http.Response) string {
 		}
 	}
 }
+
+func TestTaskWorkflowActions(t *testing.T) {
+	e := wtNew(t)
+	status := func(m map[string]any) any { return m["task"].(map[string]any)["status"] }
+
+	// T-1 has no dependencies, so it can start.
+	if code, m := e.post("/api/projects/demo/tasks/T-1/start", `{}`); code != 200 || status(m) != "in_progress" {
+		t.Fatalf("start: %d %v", code, m)
+	}
+	// Blocking needs a reason.
+	if code, m := e.post("/api/projects/demo/tasks/T-1/block", `{}`); code != 400 || wtErrKind(m) != "validation" {
+		t.Fatalf("block without reason: %d %v", code, m)
+	}
+	if code, m := e.post("/api/projects/demo/tasks/T-1/block", `{"reason": "waiting on keys"}`); code != 200 || status(m) != "blocked" {
+		t.Fatalf("block: %d %v", code, m)
+	}
+	if code, m := e.post("/api/projects/demo/tasks/T-1/unblock", `{}`); code != 200 || status(m) != "in_progress" {
+		t.Fatalf("unblock: %d %v", code, m)
+	}
+	// Notes need text.
+	if code, m := e.post("/api/projects/demo/tasks/T-1/note", `{"text": "  "}`); code != 400 {
+		t.Fatalf("empty note: %d %v", code, m)
+	}
+	if code, m := e.post("/api/projects/demo/tasks/T-1/note", `{"text": "schema drafted"}`); code != 200 {
+		t.Fatalf("note: %d %v", code, m)
+	}
+	// Done is gated on evidence; the error tells the dashboard why.
+	if code, m := e.post("/api/projects/demo/tasks/T-1/done", `{}`); code != 422 || wtErrKind(m) != "evidence_required" {
+		t.Fatalf("done without evidence: %d %v", code, m)
+	}
+	if code, m := e.post("/api/projects/demo/tasks/T-1/evidence", `{"kind": "bogus", "ref": "x"}`); code != 400 {
+		t.Fatalf("bad kind: %d %v", code, m)
+	}
+	if code, m := e.post("/api/projects/demo/tasks/T-1/evidence", `{"kind": "commit", "ref": " "}`); code != 400 {
+		t.Fatalf("empty ref: %d %v", code, m)
+	}
+	if code, m := e.post("/api/projects/demo/tasks/T-1/evidence", `{"kind": "commit", "ref": "3f2a9c1", "summary": "schema"}`); code != 200 {
+		t.Fatalf("evidence: %d %v", code, m)
+	}
+	if code, m := e.post("/api/projects/demo/tasks/T-1/done", `{"note": "shipped"}`); code != 200 || status(m) != "done" {
+		t.Fatalf("done: %d %v", code, m)
+	}
+	// Starting a task whose dependency is unfinished is refused with the reason.
+	if code, m := e.post("/api/projects/demo/tasks/T-4/start", `{}`); code != 422 {
+		t.Fatalf("start blocked-by-dependency: %d %v", code, m)
+	}
+}
+
+func TestTaskEditAndDependencies(t *testing.T) {
+	e := wtNew(t)
+	task := func(m map[string]any) map[string]any { return m["task"].(map[string]any) }
+
+	code, m := e.post("/api/projects/demo/tasks/T-3/edit", `{"title": "  Digest v2  ", "priority": 0, "description": "Weekly"}`)
+	if code != 200 || task(m)["title"] != "Digest v2" || task(m)["priority"].(float64) != 0 {
+		t.Fatalf("edit: %d %v", code, m)
+	}
+	v := int64(task(m)["version"].(float64))
+	// A stale version is a conflict that carries the current task.
+	if code, m = e.post("/api/projects/demo/tasks/T-3/edit", fmt.Sprintf(`{"expected_version": %d, "title": "x"}`, v-1)); code != 409 {
+		t.Fatalf("stale edit: %d %v", code, m)
+	}
+	for _, body := range []string{`{"title": ""}`, `{"priority": 9}`, `{"weight": 0}`, `{"nope": 1}`} {
+		if code, m = e.post("/api/projects/demo/tasks/T-3/edit", body); code != 400 {
+			t.Fatalf("edit %s: %d %v", body, code, m)
+		}
+	}
+	if code, m = e.post("/api/projects/other/tasks/T-3/edit", `{"title": "x"}`); code != 404 {
+		t.Fatalf("edit in wrong project: %d %v", code, m)
+	}
+
+	// Dependencies: T-3 may wait for T-1; a cycle (T-1 waits for T-3 while T-3
+	// waits for T-1) and a self link are refused with a reason.
+	if code, m = e.post("/api/projects/demo/tasks/T-3/dependencies/add", `{"depends_on": "T-1"}`); code != 200 || m["changed"] != true {
+		t.Fatalf("add dep: %d %v", code, m)
+	}
+	if code, m = e.post("/api/projects/demo/tasks/T-3/dependencies/add", `{"depends_on": "1"}`); code != 200 || m["changed"] != false {
+		t.Fatalf("add dep twice: %d %v", code, m)
+	}
+	if code, m = e.post("/api/projects/demo/tasks/T-1/dependencies/add", `{"depends_on": "T-3"}`); code != 422 || wtErrKind(m) != "dependency_cycle" {
+		t.Fatalf("cycle: %d %v", code, m)
+	}
+	if code, m = e.post("/api/projects/demo/tasks/T-3/dependencies/add", `{"depends_on": "T-3"}`); code < 400 {
+		t.Fatalf("self dependency: %d %v", code, m)
+	}
+	if code, m = e.post("/api/projects/demo/tasks/T-3/dependencies/add", `{"depends_on": "banana"}`); code != 400 {
+		t.Fatalf("bad id: %d %v", code, m)
+	}
+	if code, m = e.post("/api/projects/demo/tasks/T-3/dependencies/remove", `{"depends_on": "T-1"}`); code != 200 || m["changed"] != true {
+		t.Fatalf("remove dep: %d %v", code, m)
+	}
+}

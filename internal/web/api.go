@@ -446,11 +446,15 @@ func (s *Server) recentEvents(ctx context.Context, projectID int64, n int) ([]do
 // ---- writes ---------------------------------------------------------------
 
 type actionBody struct {
-	ExpectedVersion int64 `json:"expected_version"`
+	ExpectedVersion int64  `json:"expected_version"`
+	Reason          string `json:"reason"` // block
+	Note            string `json:"note"`   // done
+	Force           bool   `json:"force"`  // done: override the evidence gate (humans only)
 }
 
-// apiTaskAction handles the three changes the dashboard may make: unblock,
-// cancel and reopen. Everything else is done with the CLI or by the agent.
+// apiTaskAction handles the status changes the dashboard may make: start,
+// block, unblock, done, cancel and reopen. Notes and evidence have their own
+// endpoints. All rules live in the service layer, the same as for the CLI.
 func (s *Server) apiTaskAction(action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := taskID(r)
@@ -486,14 +490,192 @@ func (s *Server) apiTaskAction(action string) http.HandlerFunc {
 			}
 		case "cancel":
 			to = domain.TaskCancelled
+		case "start":
+			to = domain.TaskInProgress
+		case "block":
+			to = domain.TaskBlocked
+			if strings.TrimSpace(body.Reason) == "" {
+				s.fail(w, r, &domain.ValidationError{Field: "reason", Problem: "is required to block a task", Hint: "Say what the task is waiting for."})
+				return
+			}
+		case "done":
+			to = domain.TaskDone
 		default:
 			to = domain.TaskTodo
 		}
-		t, err := s.cfg.Service.UpdateTaskStatus(r.Context(), webActor, id, service.StatusChange{To: to, ExpectedVersion: body.ExpectedVersion})
+		t, err := s.cfg.Service.UpdateTaskStatus(r.Context(), webActor, id, service.StatusChange{
+			To: to, ExpectedVersion: body.ExpectedVersion,
+			BlockedReason: strings.TrimSpace(body.Reason), Note: strings.TrimSpace(body.Note), Force: body.Force,
+		})
 		if err != nil {
 			s.fail(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"task": taskOf(t)})
+	}
+}
+
+// decodeBody reads a small JSON body into v, rejecting unknown fields.
+func (s *Server) decodeBody(w http.ResponseWriter, r *http.Request, v any, example string) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		s.fail(w, r, &domain.ValidationError{Field: "body", Problem: "must be JSON like " + example})
+		return false
+	}
+	return true
+}
+
+// apiTaskNote adds a progress note to a task.
+func (s *Server) apiTaskNote(w http.ResponseWriter, r *http.Request) {
+	id, err := taskID(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if !s.decodeBody(w, r, &body, `{"text": "schema drafted"}`) {
+		return
+	}
+	if _, err := s.cfg.Service.GetTask(r.Context(), webActor, ref(r), id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if strings.TrimSpace(body.Text) == "" {
+		s.fail(w, r, &domain.ValidationError{Field: "text", Problem: "is required", Hint: "Write the note first."})
+		return
+	}
+	ev, err := s.cfg.Service.AddTaskNote(r.Context(), webActor, id, strings.TrimSpace(body.Text))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"event": ev})
+}
+
+// apiTaskEvidence attaches verification evidence to a task.
+func (s *Server) apiTaskEvidence(w http.ResponseWriter, r *http.Request) {
+	id, err := taskID(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var body struct {
+		Kind    string `json:"kind"`
+		Ref     string `json:"ref"`
+		Summary string `json:"summary"`
+	}
+	if !s.decodeBody(w, r, &body, `{"kind": "commit", "ref": "3f2a9c1", "summary": "login endpoint"}`) {
+		return
+	}
+	if _, err := s.cfg.Service.GetTask(r.Context(), webActor, ref(r), id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	k := domain.ArtifactKind(body.Kind)
+	if !k.Valid() {
+		s.fail(w, r, &domain.ValidationError{Field: "kind", Problem: "must be one of commit, pr, test_report, link, manual"})
+		return
+	}
+	if strings.TrimSpace(body.Ref) == "" {
+		s.fail(w, r, &domain.ValidationError{Field: "ref", Problem: "is required", Hint: "Give a commit SHA, PR URL, report path or link."})
+		return
+	}
+	art, err := s.cfg.Service.RecordArtifact(r.Context(), webActor, id, service.ArtifactInput{Kind: k, Ref: strings.TrimSpace(body.Ref), Summary: strings.TrimSpace(body.Summary)})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"artifact": art.ID})
+}
+
+// apiTaskEdit changes a task's title, description, criteria, priority or
+// weight. Only the fields present in the body change.
+func (s *Server) apiTaskEdit(w http.ResponseWriter, r *http.Request) {
+	id, err := taskID(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var body struct {
+		ExpectedVersion    int64   `json:"expected_version"`
+		Title              *string `json:"title"`
+		Description        *string `json:"description"`
+		AcceptanceCriteria *string `json:"acceptance_criteria"`
+		Priority           *int    `json:"priority"`
+		Weight             *int    `json:"weight"`
+	}
+	if !s.decodeBody(w, r, &body, `{"expected_version": 3, "title": "New title", "priority": 1}`) {
+		return
+	}
+	if body.ExpectedVersion < 0 {
+		s.fail(w, r, &domain.ValidationError{Field: "expected_version", Problem: "must be 0 or more"})
+		return
+	}
+	if _, err := s.cfg.Service.GetTask(r.Context(), webActor, ref(r), id); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	trim := func(v *string) *string {
+		if v == nil {
+			return nil
+		}
+		t := strings.TrimSpace(*v)
+		return &t
+	}
+	t, err := s.cfg.Service.UpdateTask(r.Context(), webActor, id, service.TaskEdit{
+		Title: trim(body.Title), Description: trim(body.Description), AcceptanceCriteria: trim(body.AcceptanceCriteria),
+		Priority: body.Priority, Weight: body.Weight, ExpectedVersion: body.ExpectedVersion,
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": taskOf(t)})
+}
+
+// apiTaskDependency adds or removes one "waits for" link of a task.
+func (s *Server) apiTaskDependency(add bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := taskID(r)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		var body struct {
+			DependsOn string `json:"depends_on"`
+		}
+		if !s.decodeBody(w, r, &body, `{"depends_on": "T-5"}`) {
+			return
+		}
+		on, err := domain.ParseID(domain.EntityTask, body.DependsOn)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		if _, err := s.cfg.Service.GetTask(r.Context(), webActor, ref(r), id); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		// The other task must be in this project too, or the dashboard could
+		// be used to link across projects.
+		if _, err := s.cfg.Service.GetTask(r.Context(), webActor, ref(r), on); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		var changed bool
+		if add {
+			changed, err = s.cfg.Service.AddDependency(r.Context(), webActor, id, on)
+		} else {
+			changed, err = s.cfg.Service.RemoveDependency(r.Context(), webActor, id, on)
+		}
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"changed": changed})
 	}
 }

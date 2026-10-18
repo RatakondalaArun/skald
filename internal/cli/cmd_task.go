@@ -15,7 +15,7 @@ func newTaskCmd(a *app) *cobra.Command {
 	return group("task", "Create tasks and move them through their lifecycle",
 		newTaskAddCmd(a), newTaskListCmd(a), newTaskShowCmd(a),
 		newTaskStartCmd(a), newTaskDoneCmd(a), newTaskBlockCmd(a), newTaskUnblockCmd(a),
-		newTaskCancelCmd(a), newTaskReopenCmd(a), newTaskNoteCmd(a), newTaskDepCmd(a))
+		newTaskCancelCmd(a), newTaskReopenCmd(a), newTaskNoteCmd(a), newTaskEditCmd(a), newTaskDepCmd(a))
 }
 
 func newTaskAddCmd(a *app) *cobra.Command {
@@ -476,4 +476,73 @@ func newTaskDepCmd(a *app) *cobra.Command {
 	return group("dep", "Add or remove task dependencies",
 		dep("add <task> <depends-on>", "Make <task> wait for <depends-on>", true),
 		dep("remove <task> <depends-on>", "Remove a dependency", false))
+}
+
+func newTaskEditCmd(a *app) *cobra.Command {
+	var title, desc, criteria, priority string
+	var weight int
+	var version int64
+	c := &cobra.Command{
+		Use:   "edit <task>",
+		Short: "Change a task's title, description, criteria, priority or weight",
+		Long: `Changes only the fields you pass. Pass an empty string to clear the
+description or criteria. Use skald task dep to change what a task waits for.`,
+		Example: `  skald task edit T-4 --title "Login form with rate limiting"
+  skald task edit T-4 --priority 0 --description "Blocks the release"
+  skald task edit T-4 --criteria ""`,
+		Args: exactArgs(1),
+		RunE: a.do(func(e *env, c *cobra.Command, args []string) error {
+			id, err := taskArg(args[0])
+			if err != nil {
+				return err
+			}
+			f := c.Flags()
+			var in service.TaskEdit
+			in.ExpectedVersion = version
+			if f.Changed("title") {
+				in.Title = &title
+			}
+			if f.Changed("description") {
+				in.Description = &desc
+			}
+			if f.Changed("criteria") {
+				in.AcceptanceCriteria = &criteria
+			}
+			if f.Changed("priority") {
+				p, err := parsePriority(priority)
+				if err != nil {
+					return err
+				}
+				in.Priority = &p
+			}
+			if f.Changed("weight") {
+				in.Weight = &weight
+			}
+			if in.Title == nil && in.Description == nil && in.AcceptanceCriteria == nil && in.Priority == nil && in.Weight == nil {
+				return usagef("nothing to change: pass at least one of --title, --description, --criteria, --priority, --weight")
+			}
+			before, err := e.svc.GetTask(e.ctx, e.actor, e.ref, id)
+			if err != nil {
+				return err
+			}
+			t, err := e.svc.UpdateTask(e.ctx, e.actor, id, in)
+			if err != nil {
+				return err
+			}
+			return e.emit(toTask(t), func(w io.Writer) {
+				if t.Version == before.Task.Version {
+					fmt.Fprintf(w, "%s already looks like that, nothing changed\n", taskID(id))
+					return
+				}
+				fmt.Fprintf(w, "updated %s %s\n", taskID(t.ID), t.Title)
+			})
+		}),
+	}
+	c.Flags().StringVar(&title, "title", "", "new title")
+	c.Flags().StringVar(&desc, "description", "", "new description (empty clears it)")
+	c.Flags().StringVar(&criteria, "criteria", "", "new acceptance criteria (empty clears them)")
+	c.Flags().StringVar(&priority, "priority", "", "0 (urgent) to 3 (low)")
+	c.Flags().IntVar(&weight, "weight", 0, "relative weight in feature progress (1-10)")
+	c.Flags().Int64Var(&version, "version", 0, "fail if the task is not at this version (see skald task show)")
+	return c
 }

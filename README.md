@@ -149,7 +149,7 @@ Global flags: `--json` (JSON output on read commands), `-p, --project <slug>`. S
 | `feature add\|list` | Add features (`--weight`, `--position`, `--description`) |
 | `task add\|list\|show` | Create and view tasks (`add` needs `--feature`; also `--priority`, `--weight`, `--criteria`, `--key`) |
 | `task start\|done\|block\|unblock\|cancel\|reopen` | Move a task through its lifecycle (`block` needs `--reason`; `done` takes `--force`, `--note`) |
-| `task note`, `task dep add\|remove` | Notes and dependencies |
+| `task note`, `task edit`, `task dep add\|remove` | Notes, edits (title, description, criteria, priority, weight) and dependencies |
 | `plan import <file\|->` | Import a JSON plan |
 | `evidence add <task>` | Attach evidence (`--kind`, `--ref`, `--summary`) |
 | `next` | Tasks that can start now |

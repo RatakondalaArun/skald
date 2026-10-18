@@ -620,3 +620,41 @@ func TestProjectLink(t *testing.T) {
 	contains(t, r.stdout, "unlinked")
 	s.ok("project", "link", "other")
 }
+
+func TestTaskEdit(t *testing.T) {
+	s := newSandbox(t)
+	s.ok("init")
+	s.ok("project", "create", "Edit Me")
+	s.ok("feature", "add", "Auth")
+	s.ok("task", "add", "Login form", "--feature", "F-1")
+
+	r := s.ok("task", "edit", "T-1", "--title", "Login form with rate limits", "--priority", "0", "--description", "Blocks launch")
+	contains(t, r.stdout, "updated T-1")
+	var d struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Priority    int    `json:"priority"`
+	}
+	decode(t, s.ok("task", "show", "T-1", "--json").stdout, &d)
+	if d.Title != "Login form with rate limits" || d.Priority != 0 || d.Description != "Blocks launch" {
+		t.Fatalf("task = %+v", d)
+	}
+	// Same values again: nothing to do, and it says so.
+	contains(t, s.ok("task", "edit", "T-1", "--priority", "0").stdout, "nothing changed")
+	// Clearing a field with an empty string.
+	s.ok("task", "edit", "T-1", "--description", "")
+	d.Description = "" // omitted from the JSON once empty
+	decode(t, s.ok("task", "show", "T-1", "--json").stdout, &d)
+	if got := s.ok("task", "show", "T-1").stdout; strings.Contains(got, "Blocks launch") {
+		t.Fatalf("description not cleared:\n%s", got)
+	}
+	// Usage and validation errors.
+	contains(t, s.fail(2, "task", "edit", "T-1").stderr, "nothing to change")
+	s.fail(2, "task", "edit", "T-1", "--priority", "7")
+	if r := s.run("task", "edit", "T-1", "--title", " "); r.code == 0 {
+		t.Fatal("blank title accepted")
+	}
+	if r := s.run("task", "edit", "T-1", "--title", "x", "--version", "99"); r.code == 0 {
+		t.Fatal("stale --version accepted")
+	}
+}

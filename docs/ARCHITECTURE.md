@@ -228,7 +228,7 @@ Views:
 3. **Task detail**: description, acceptance criteria, dependencies, artifacts, notes and event history.
 4. **Activity feed**: live, filterable by actor.
 
-The dashboard is **read-mostly**. v1 offers no editing beyond unblock, cancel and reopen. Humans use the CLI for the rest. This keeps all validation in the service layer and the frontend thin.
+The dashboard is **read-mostly**. From the task drawer a human can start, block, unblock, complete (with the evidence gate, and a recorded override), cancel and reopen a task, and add notes and evidence. It can also edit a task's title, description, criteria, priority and weight, and add or remove its dependencies. Plans and features stay in the CLI and MCP. Every change goes through the same service-layer rules as the CLI, so the frontend stays thin.
 
 **Local security**: bind `127.0.0.1` by default. Reject requests whose `Host` is not the configured loopback host (DNS rebinding). Mutating endpoints require a per-process random token, delivered in the served HTML, and a matching `Origin` header. Refuse non-loopback `--addr` unless `--insecure-listen` is passed.
 

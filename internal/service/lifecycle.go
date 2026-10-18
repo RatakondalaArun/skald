@@ -118,3 +118,49 @@ func (s *Service) RemoveDependency(ctx context.Context, actor domain.Actor, task
 	})
 	return removed, err
 }
+
+// TaskEdit lists the fields of a task to change. Nil fields are left alone; an
+// empty description or criteria string clears the field.
+type TaskEdit struct {
+	Title              *string
+	Description        *string
+	AcceptanceCriteria *string
+	Priority           *int
+	Weight             *int
+	ExpectedVersion    int64 // 0 skips the optimistic-concurrency check
+}
+
+// UpdateTask edits a task's title, description, acceptance criteria, priority
+// or weight. It works in any status and records one task.updated event naming
+// the fields that changed. An edit that changes nothing writes nothing.
+func (s *Service) UpdateTask(ctx context.Context, actor domain.Actor, taskID int64, e TaskEdit) (domain.Task, error) {
+	var out domain.Task
+	err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
+		cur, err := store.GetTask(ctx, tx, taskID)
+		if err != nil {
+			return err
+		}
+		p := store.TaskPatch{}
+		differs := func(old string, v *string) *string {
+			if v == nil || *v == old {
+				return nil
+			}
+			return v
+		}
+		p.Title = differs(cur.Title, e.Title)
+		p.Description = differs(cur.Description, e.Description)
+		p.AcceptanceCriteria = differs(cur.AcceptanceCriteria, e.AcceptanceCriteria)
+		if e.Priority != nil && *e.Priority != cur.Priority {
+			p.Priority = e.Priority
+		}
+		if e.Weight != nil && *e.Weight != cur.Weight {
+			p.Weight = e.Weight
+		}
+		out, err = store.UpdateTaskFields(ctx, tx, s.meta(actor), taskID, e.ExpectedVersion, p)
+		return err
+	})
+	if err != nil {
+		return domain.Task{}, err
+	}
+	return out, nil
+}

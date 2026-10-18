@@ -7,21 +7,28 @@
 <meta name="skald-token" content="{{TOKEN}}">
 <meta name="skald-version" content="{{VERSION}}">
 <title>Skald</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%233846b8'/%3E%3Cpath d='M9 17l5 5 9-12' fill='none' stroke='%23fff' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<script src="/static/theme.js"></script>
 <link rel="stylesheet" href="/static/style.css">
 <script type="module" src="/static/app.js"></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header class="bar">
-  <a class="wordmark" href="#/" aria-label="Skald, all projects">skald</a>
-  <nav aria-label="Main">
-    <a href="#/" data-nav="projects">Projects</a>
-    <a href="#/activity" data-nav="activity">Activity</a>
-  </nav>
-  <span id="live" class="live" role="status" data-state="connecting"><span class="live-dot" aria-hidden="true"></span><span id="live-text">Connecting</span></span>
-</header>
-<main id="main" tabindex="-1"><p class="muted pad">Loading…</p></main>
+<div class="app">
+  <aside class="rail" aria-label="Navigation">
+    <a class="wordmark" href="#/" aria-label="Skald, all projects">skald</a>
+    <nav class="rail-nav" aria-label="Main">
+      <a href="#/" data-nav="projects">Projects</a>
+      <a href="#/activity" data-nav="activity">Activity</a>
+    </nav>
+    <div class="rail-projects" id="rail-projects" aria-label="Projects"></div>
+    <div class="rail-foot">
+      <span id="live" class="live" role="status" data-state="connecting"><span class="live-dot" aria-hidden="true"></span><span id="live-text">Connecting</span></span>
+      <button type="button" id="theme" class="iconbtn" aria-label="Switch color theme" title="Theme: auto"></button>
+    </div>
+  </aside>
+  <main id="main" tabindex="-1"><p class="muted pad">Loading…</p></main>
+</div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <noscript><p class="pad">The dashboard needs JavaScript. The same data is available with <code>skald status</code>.</p></noscript>
