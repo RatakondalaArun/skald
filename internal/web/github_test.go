@@ -21,6 +21,12 @@ func (wtGitHub) FetchRepo(context.Context, github.Repo) (github.Snapshot, error)
 }
 func (wtGitHub) CloseIssue(context.Context, github.Repo, int, string, string) error { return nil }
 func (wtGitHub) CloseMilestone(context.Context, github.Repo, int) error             { return nil }
+func (wtGitHub) CreateMilestone(context.Context, github.Repo, string, string) (int, error) {
+	return 0, nil
+}
+func (wtGitHub) CreateIssue(context.Context, github.Repo, github.NewIssue) (int, string, error) {
+	return 0, "", nil
+}
 
 func TestGitHubSyncEndpoint(t *testing.T) {
 	db, err := store.Open(wtCtx, filepath.Join(t.TempDir(), "skald.db"))

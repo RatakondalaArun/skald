@@ -186,6 +186,10 @@ type GitHubSettings struct {
 	// Milestones maps a milestone number (as a string; "0" is "no milestone")
 	// to the ID of the feature that holds its issues.
 	Milestones map[string]int64 `json:"milestones,omitempty"`
+	// Issues maps a task ID (as a string) to the number of the issue Skald
+	// created for it. Tasks synced from GitHub do not need an entry: their
+	// idempotency key names the issue.
+	Issues map[string]int `json:"issues,omitempty"`
 }
 
 // DefaultSettings returns the settings of a new project.

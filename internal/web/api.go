@@ -684,13 +684,14 @@ func (s *Server) apiTaskDependency(add bool) http.HandlerFunc {
 // closes issues whose tasks are finished here. See service.SyncGitHub.
 func (s *Server) apiGitHubSync(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Push   bool `json:"push"`
-		DryRun bool `json:"dry_run"`
+		Push         bool `json:"push"`
+		CreateIssues bool `json:"create_issues"`
+		DryRun       bool `json:"dry_run"`
 	}
-	if !s.decodeBody(w, r, &body, `{"push": false, "dry_run": false}`) {
+	if !s.decodeBody(w, r, &body, `{"push": false, "create_issues": false, "dry_run": false}`) {
 		return
 	}
-	res, err := s.cfg.Service.SyncGitHub(r.Context(), webActor, ref(r), service.GitHubSyncOptions{Push: body.Push, DryRun: body.DryRun})
+	res, err := s.cfg.Service.SyncGitHub(r.Context(), webActor, ref(r), service.GitHubSyncOptions{Push: body.Push, CreateIssues: body.CreateIssues, DryRun: body.DryRun})
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -713,6 +714,8 @@ func (s *Server) apiGitHubSync(w http.ResponseWriter, r *http.Request) {
 		"skipped": note(res.Skipped), "diverged": note(res.Diverged), "pushed": note(res.Pushed), "push_failed": note(res.PushFailed),
 		"warnings":            append([]string{}, res.Warnings...),
 		"milestones_pushed":   len(res.MilestonesPushed),
+		"created":             note(res.Created),
+		"create_failed":       note(res.CreateFailed),
 		"milestones_diverged": len(res.MilestonesDiverged),
 	})
 }
