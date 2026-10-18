@@ -131,6 +131,9 @@ func (s *server) registerRead(srv *mcp.Server) {
 			if t.AcceptanceCriteria != "" {
 				o["acceptance_criteria"] = t.AcceptanceCriteria
 			}
+			if u := service.GitHubIssueURL(t.IdempotencyKey); u != "" {
+				o["github"] = u
+			}
 			if t.Assignee != "" {
 				o["assignee"] = t.Assignee
 			}

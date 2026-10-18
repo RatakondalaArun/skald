@@ -173,6 +173,19 @@ func (a Actor) String() string { return string(a) }
 type ProjectSettings struct {
 	// RequireEvidence makes completing a task require at least one artifact.
 	RequireEvidence bool `json:"require_evidence"`
+	// GitHub links the project to a GitHub repository for `skald github sync`.
+	GitHub *GitHubSettings `json:"github,omitempty"`
+}
+
+// GitHubSettings is the GitHub link of a project and the sync's memory of
+// which feature stands for which milestone. Issues need no entry here: a
+// synced task carries the idempotency key "github:<owner>/<name>#<number>".
+type GitHubSettings struct {
+	// Repo is "owner/name".
+	Repo string `json:"repo"`
+	// Milestones maps a milestone number (as a string; "0" is "no milestone")
+	// to the ID of the feature that holds its issues.
+	Milestones map[string]int64 `json:"milestones,omitempty"`
 }
 
 // DefaultSettings returns the settings of a new project.

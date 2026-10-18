@@ -8,7 +8,7 @@ Skald is a local-first project tracker for coding agents. Claude Code plans a pr
 2. **One domain core, thin entry points.** The CLI, MCP server and web server call the same service layer. Business rules live there and nowhere else.
 3. **Agents report facts, the system computes conclusions.** Progress, "ready" and "blocked" are derived from task state. An agent cannot set a percentage.
 4. **Design for LLM callers.** Short IDs, compact output, actionable error messages, bulk operations and idempotent writes.
-5. **Local only.** Binds to loopback, no accounts, no network dependencies.
+5. **Local only.** Binds to loopback, no accounts, no network dependencies. The one exception is GitHub sync (section 13), which talks to GitHub only when a user or agent runs it.
 
 ## 2. Process model
 
@@ -250,7 +250,7 @@ skald/
 └── README.md
 ```
 
-Dependencies are one-directional: `cli`, `mcpserver` and `web` depend on `service`, `service` on `domain` and `store`, and `domain` on nothing.
+Dependencies are one-directional: `cli`, `mcpserver` and `web` depend on `service`, `service` on `domain`, `store` and `github`, and `domain` on nothing. `github` knows nothing about the database.
 
 Libraries: Cobra (CLI), `modernc.org/sqlite`, the MCP Go SDK, `log/slog`, and the standard library for HTTP. Use plain `database/sql` with hand-written queries. A repository layer this small does not justify sqlc.
 
@@ -268,5 +268,24 @@ Libraries: Cobra (CLI), `modernc.org/sqlite`, the MCP Go SDK, `log/slog`, and th
 - Multi-user or remote access. Out of scope.
 - Editing tasks heavily from the web UI.
 - Sub-tasks (the model is project → feature → task).
-- Importing from or exporting to other trackers (a `skald export --json` may come in hardening).
+- Importing from or exporting to trackers other than GitHub (GitHub is section 13).
 - A full TUI. `status --watch` first, and revisit only if it proves insufficient.
+
+## 13. GitHub sync
+
+`skald github sync`, the `sync_github` MCP tool and `POST /api/projects/{slug}/github/sync` all call `service.SyncGitHub`.
+
+**Link.** A project's repository lives in `projects.settings` as `{"github": {"repo": "owner/name", "milestones": {"<number>": <feature id>}}}`. The milestone map is the sync's memory of which feature stands for which milestone (`"0"` is "No milestone"). Issues need no table: the task that mirrors issue 12 carries the idempotency key `github:owner/name#12` (owner/name lower-cased), so the existing `UNIQUE(project_id, idempotency_key)` makes the pull idempotent. No migration was needed, and export/import carry the link because settings are exported.
+
+**Order.** Everything is read from GitHub (GraphQL: milestones, issues with their closing pull requests and Projects board Status, discussions) before the write transaction starts, so no network call happens inside it. Then, in one `WriteTx`:
+
+1. A feature for every milestone that has issues (milestones without issues would count as empty 0% features). Renamed milestones rename their feature.
+2. Each issue under its own `SAVEPOINT`. A domain error (for example, a closed issue whose task has unfinished dependencies) rolls back that issue only and is reported as skipped.
+3. The discussions document gets a new version only when its text changed.
+4. Settings are written only when the link or milestone map changed.
+
+A dry run does the same work and rolls the transaction back.
+
+**Rules.** Status changes go through `transitionTx`, so the state machine, dependency check and evidence gate apply as for any caller. A closed issue's task is completed only after evidence exists: merged closing PRs as `pr` artifacts, otherwise a `link` to the closed issue. `Force` is never used. GitHub never reopens a task; a task done or cancelled in Skald whose issue is open is reported as diverged, and `--push` closes the issue (REST, after the transaction commits) and records a note on the task. A blocker set from the board is cleared by a later sync; a blocker someone reported in Skald is left alone.
+
+**Auth.** `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token`. `SKALD_GITHUB_API_URL` points at GitHub Enterprise.

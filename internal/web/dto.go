@@ -52,14 +52,19 @@ type projectDTO struct {
 	Description string `json:"description,omitempty"`
 	Status      string `json:"status"`
 	RepoPath    string `json:"repo_path,omitempty"`
+	GitHub      string `json:"github,omitempty"` // linked repository, owner/name
 	CreatedAt   string `json:"created_at"`
 }
 
 func projectOf(p domain.Project) projectDTO {
-	return projectDTO{
+	d := projectDTO{
 		ID: domain.FormatID(domain.EntityProject, p.ID), Slug: p.Slug, Name: p.Name,
 		Description: p.Description, Status: string(p.Status), RepoPath: p.RepoPath, CreatedAt: ts(p.CreatedAt),
 	}
+	if p.Settings.GitHub != nil {
+		d.GitHub = p.Settings.GitHub.Repo
+	}
+	return d
 }
 
 type overviewDTO struct {
@@ -101,6 +106,7 @@ type taskDTO struct {
 	CompletedAt        string `json:"completed_at,omitempty"`
 	UpdatedAt          string `json:"updated_at"`
 	CreatedAt          string `json:"created_at"`
+	GitHub             string `json:"github,omitempty"` // issue URL, for tasks synced from GitHub
 }
 
 func taskOf(t domain.Task) taskDTO {
@@ -112,6 +118,7 @@ func taskOf(t domain.Task) taskDTO {
 		BlockedReason: t.BlockedReason, Version: t.Version,
 		StartedAt: tsp(t.StartedAt), CompletedAt: tsp(t.CompletedAt),
 		UpdatedAt: ts(t.UpdatedAt), CreatedAt: ts(t.CreatedAt),
+		GitHub: service.GitHubIssueURL(t.IdempotencyKey),
 	}
 }
 

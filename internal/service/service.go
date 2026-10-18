@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"skald/internal/domain"
+	"skald/internal/github"
 	"skald/internal/store"
 )
 
@@ -16,6 +17,9 @@ type Service struct {
 	now    func() time.Time
 	getenv func(string) string
 	getwd  func() (string, error)
+
+	newGitHub func() (GitHubAPI, error)
+	gitRemote func(dir string) (github.Repo, error)
 }
 
 // Option customises a Service, mainly for tests.
@@ -38,6 +42,9 @@ func New(db *store.DB, opts ...Option) *Service {
 		now:    func() time.Time { return time.Now().UTC() },
 		getenv: os.Getenv,
 		getwd:  os.Getwd,
+
+		newGitHub: defaultGitHub,
+		gitRemote: github.OriginRepo,
 	}
 	for _, o := range opts {
 		o(s)

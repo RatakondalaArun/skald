@@ -679,3 +679,38 @@ func (s *Server) apiTaskDependency(add bool) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, map[string]any{"changed": changed})
 	}
 }
+
+// apiGitHubSync pulls the project's linked GitHub repository, and with push
+// closes issues whose tasks are finished here. See service.SyncGitHub.
+func (s *Server) apiGitHubSync(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Push   bool `json:"push"`
+		DryRun bool `json:"dry_run"`
+	}
+	if !s.decodeBody(w, r, &body, `{"push": false, "dry_run": false}`) {
+		return
+	}
+	res, err := s.cfg.Service.SyncGitHub(r.Context(), webActor, ref(r), service.GitHubSyncOptions{Push: body.Push, DryRun: body.DryRun})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	note := func(ns []service.GitHubIssueNote) []map[string]any {
+		out := make([]map[string]any, 0, len(ns))
+		for _, n := range ns {
+			m := map[string]any{"issue": n.Issue, "note": n.Note}
+			if n.TaskID != 0 {
+				m["task"] = domain.FormatID(domain.EntityTask, n.TaskID)
+			}
+			out = append(out, m)
+		}
+		return out
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"repo": res.Repo, "dry_run": res.DryRun, "issues": res.Issues,
+		"features_created": res.FeaturesCreated, "tasks_created": res.TasksCreated, "tasks_updated": res.TasksUpdated,
+		"evidence_added": res.EvidenceAdded, "status_changes": len(res.StatusChanges),
+		"skipped": note(res.Skipped), "diverged": note(res.Diverged), "pushed": note(res.Pushed), "push_failed": note(res.PushFailed),
+		"warnings": append([]string{}, res.Warnings...),
+	})
+}
