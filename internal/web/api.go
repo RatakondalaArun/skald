@@ -115,13 +115,16 @@ func (s *Server) apiProject(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	links := service.NewGitHubLinks(sum.Project)
 	features := make([]featureDTO, 0, len(sum.Features))
 	for _, f := range sum.Features {
-		features = append(features, featureDTO{
+		d := featureDTO{
 			ID: domain.FormatID(domain.EntityFeature, f.Feature.ID), Title: f.Feature.Title,
 			Description: f.Feature.Description, Status: string(f.Status), Weight: f.Feature.Weight,
 			Position: f.Feature.Position, Progress: progressOf(f.Progress), Counts: countsOf(f.Counts), Counted: f.Counted,
-		})
+		}
+		d.linkGitHub(links, f.Feature.ID)
+		features = append(features, d)
 	}
 	type blockedDTO struct {
 		Task   taskDTO `json:"task"`
@@ -129,7 +132,7 @@ func (s *Server) apiProject(w http.ResponseWriter, r *http.Request) {
 	}
 	blocked := make([]blockedDTO, 0, len(sum.Blocked))
 	for _, b := range sum.Blocked {
-		blocked = append(blocked, blockedDTO{taskOf(b.Task), b.Reason})
+		blocked = append(blocked, blockedDTO{taskIn(links, b.Task), b.Reason})
 	}
 	docs := make([]documentDTO, 0, len(sum.Documents))
 	for _, d := range sum.Documents {
@@ -142,7 +145,7 @@ func (s *Server) apiProject(w http.ResponseWriter, r *http.Request) {
 		"ready_count": sum.ReadyCount,
 		"features":    features,
 		"blocked":     blocked,
-		"stale":       tasksOf(sum.Stale),
+		"stale":       tasksIn(links, sum.Stale),
 		"documents":   docs,
 	})
 }
@@ -153,15 +156,28 @@ func (s *Server) apiFeatures(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	links := s.githubLinks(r)
 	out := make([]featureDTO, 0, len(list))
 	for _, f := range list {
-		out = append(out, featureDTO{
+		d := featureDTO{
 			ID: domain.FormatID(domain.EntityFeature, f.Feature.ID), Title: f.Feature.Title,
 			Description: f.Feature.Description, Status: string(f.Feature.Status), Weight: f.Feature.Weight,
 			Position: f.Feature.Position, Progress: progressOf(f.Progress), Counts: statusCountsOf(f.Counts), Counted: true,
-		})
+		}
+		d.linkGitHub(links, f.Feature.ID)
+		out = append(out, d)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"features": out})
+}
+
+// githubLinks reads the GitHub links of the request's project. A project that
+// cannot be read links nothing; the handler reports its own error.
+func (s *Server) githubLinks(r *http.Request) service.GitHubLinks {
+	p, err := s.cfg.Service.ResolveProject(r.Context(), ref(r))
+	if err != nil {
+		return service.GitHubLinks{}
+	}
+	return service.NewGitHubLinks(p)
 }
 
 // allTasks pages through ListTasks. The second result says the cap was hit.
@@ -210,9 +226,10 @@ func (s *Server) apiBoard(w http.ResponseWriter, r *http.Request) {
 	for _, t := range prog.Stale {
 		isStale[t.ID] = true
 	}
+	links := service.NewGitHubLinks(prog.Project)
 	out := make([]taskDTO, 0, len(tasks))
 	for _, t := range tasks {
-		d := taskOf(t)
+		d := taskIn(links, t)
 		d.Description, d.AcceptanceCriteria = "", "" // the board does not need the long text
 		d.Ready, d.Stale = isReady[t.ID], isStale[t.ID]
 		out = append(out, d)
@@ -254,7 +271,7 @@ func (s *Server) apiTasks(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasksOf(list.Tasks), "truncated": list.Truncated})
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasksIn(s.githubLinks(r), list.Tasks), "truncated": list.Truncated})
 }
 
 func (s *Server) apiTask(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +310,7 @@ func (s *Server) apiTask(w http.ResponseWriter, r *http.Request) {
 	for _, u := range d.UnmetDependencies {
 		unmet = append(unmet, domain.FormatID(domain.EntityTask, u))
 	}
-	task := taskOf(d.Task)
+	task := taskIn(s.githubLinks(r), d.Task)
 	task.Ready, task.Stale = d.Ready, d.Stale
 	writeJSON(w, http.StatusOK, map[string]any{
 		"project":      slug,
@@ -318,7 +335,7 @@ func (s *Server) apiNext(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasksOf(res.Tasks), "total": res.Total, "truncated": res.Truncated})
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasksIn(s.githubLinks(r), res.Tasks), "total": res.Total, "truncated": res.Truncated})
 }
 
 func (s *Server) apiDocuments(w http.ResponseWriter, r *http.Request) {

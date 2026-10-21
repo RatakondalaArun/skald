@@ -66,6 +66,57 @@ func GitHubIssueURL(key string) string {
 	return "https://github.com/" + repo + "/issues/" + num
 }
 
+// GitHubLinks finds the GitHub issue of a project's tasks and the milestone
+// of its features: synced tasks name their issue in the idempotency key,
+// issues Skald created and all milestones are in the project's GitHub link.
+// The zero value links nothing.
+type GitHubLinks struct {
+	repo       string
+	issues     map[int64]int
+	milestones map[int64]int
+}
+
+// NewGitHubLinks reads the links of p.
+func NewGitHubLinks(p domain.Project) GitHubLinks {
+	gh := p.Settings.GitHub
+	if gh == nil {
+		return GitHubLinks{}
+	}
+	l := GitHubLinks{repo: gh.Repo, issues: map[int64]int{}, milestones: map[int64]int{}}
+	for task, n := range gh.Issues {
+		if id, err := strconv.ParseInt(task, 10, 64); err == nil {
+			l.issues[id] = n
+		}
+	}
+	for ms, feature := range gh.Milestones {
+		if n, err := strconv.Atoi(ms); err == nil && n > 0 {
+			l.milestones[feature] = n
+		}
+	}
+	return l
+}
+
+// Issue returns the number and URL of t's issue, or 0 and "".
+func (l GitHubLinks) Issue(t domain.Task) (int, string) {
+	if url := GitHubIssueURL(t.IdempotencyKey); url != "" {
+		n, _ := strconv.Atoi(url[strings.LastIndexByte(url, '/')+1:])
+		return n, url
+	}
+	if n := l.issues[t.ID]; n > 0 && l.repo != "" {
+		return n, fmt.Sprintf("https://github.com/%s/issues/%d", l.repo, n)
+	}
+	return 0, ""
+}
+
+// Milestone returns the number and URL of the milestone a feature stands
+// for, or 0 and "". The "No milestone" feature has none.
+func (l GitHubLinks) Milestone(featureID int64) (int, string) {
+	if n := l.milestones[featureID]; n > 0 && l.repo != "" {
+		return n, fmt.Sprintf("https://github.com/%s/milestone/%d", l.repo, n)
+	}
+	return 0, ""
+}
+
 // noMilestone is the Milestones key of the feature that holds issues without
 // a milestone.
 const (

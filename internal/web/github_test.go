@@ -17,7 +17,10 @@ import (
 type wtGitHub struct{}
 
 func (wtGitHub) FetchRepo(context.Context, github.Repo) (github.Snapshot, error) {
-	return github.Snapshot{Issues: []github.Issue{{Number: 9, Title: "Dark mode", State: "OPEN", URL: "https://github.com/acme/rocket/issues/9"}}}, nil
+	return github.Snapshot{
+		Milestones: []github.Milestone{{Number: 3, Title: "Launch", State: "OPEN"}},
+		Issues:     []github.Issue{{Number: 9, Title: "Dark mode", State: "OPEN", URL: "https://github.com/acme/rocket/issues/9", Milestone: 3}},
+	}, nil
 }
 func (wtGitHub) CloseIssue(context.Context, github.Repo, int, string, string) error { return nil }
 func (wtGitHub) CloseMilestone(context.Context, github.Repo, int) error             { return nil }
@@ -25,7 +28,7 @@ func (wtGitHub) CreateMilestone(context.Context, github.Repo, string, string) (i
 	return 0, nil
 }
 func (wtGitHub) CreateIssue(context.Context, github.Repo, github.NewIssue) (int, string, error) {
-	return 0, "", nil
+	return 42, "https://github.com/acme/rocket/issues/42", nil
 }
 
 func TestGitHubSyncEndpoint(t *testing.T) {
@@ -59,8 +62,30 @@ func TestGitHubSyncEndpoint(t *testing.T) {
 		t.Fatalf("project github: %v", proj["project"])
 	}
 	_, task := e.get("/api/projects/rocket/tasks/T-1")
-	if task["task"].(map[string]any)["github"] != "https://github.com/acme/rocket/issues/9" {
-		t.Fatalf("task github: %v", task["task"])
+	if tk := task["task"].(map[string]any); tk["github"] != "https://github.com/acme/rocket/issues/9" || tk["github_issue"] != float64(9) {
+		t.Fatalf("task github: %v", tk)
+	}
+	if f := proj["features"].([]any)[0].(map[string]any); f["github_milestone"] != float64(3) || f["github_url"] != "https://github.com/acme/rocket/milestone/3" {
+		t.Fatalf("feature github: %v", f)
+	}
+
+	// A task that started in Skald shows the issue a sync created for it.
+	feat := proj["features"].([]any)[0].(map[string]any)["id"].(string)
+	fid, _ := domain.ParseID(domain.EntityFeature, feat)
+	if _, _, err := svc.CreateTask(wtCtx, domain.Human, service.ProjectRef{Slug: "rocket"}, service.CreateTaskInput{FeatureID: fid, Title: "Docs"}); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := e.post("/api/projects/rocket/github/sync", `{"create_issues":true}`); code != http.StatusOK {
+		t.Fatalf("create issues: %d %v", code, body)
+	}
+	_, board := e.get("/api/projects/rocket/board")
+	issues := map[string]any{}
+	for _, x := range board["tasks"].([]any) {
+		tk := x.(map[string]any)
+		issues[tk["id"].(string)] = tk["github_issue"]
+	}
+	if issues["T-1"] != float64(9) || issues["T-2"] != float64(42) {
+		t.Fatalf("board issues: %v", issues)
 	}
 	// The endpoint is a mutation: it needs the token like the others.
 	req := e.postReq("/api/projects/rocket/github/sync", `{}`)

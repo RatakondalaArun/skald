@@ -113,7 +113,8 @@ function featureList(slug, features, st, rerender) {
         h('div', { class: 'meta' }, h('span', { class: 'chip' }, mk(FEATURE_MARK[f.status] || 'todo'), FEATURE_LABEL[f.status] || f.status),
           `, ${f.counts.done} of ${plural(countable, 'task')} done`)),
       progressBar(f.progress.fraction, `${f.title} progress`),
-      h('div', { class: 'pct' }, `${pct(f.progress.fraction)}%`))));
+      h('div', { class: 'pct' }, `${pct(f.progress.fraction)}%`))),
+    f.github_url ? h('a', { class: 'gh-link', href: f.github_url, target: '_blank', rel: 'noopener noreferrer' }, `GitHub milestone #${f.github_milestone}`) : null);
   }));
 }
 
@@ -128,6 +129,7 @@ function taskCard(slug, t, { showFeature, features, open }) {
   if (t.priority === 0) tags.push(h('span', { class: 'tag urgent' }, 'urgent'));
   else if (t.priority === 1) tags.push(h('span', { class: 'tag' }, 'high'));
   if (t.ready) tags.push(h('span', { class: 'tag ready' }, 'ready'));
+  if (t.github_issue) tags.push(h('span', { class: 'tag gh', title: `GitHub issue #${t.github_issue}` }, `#${t.github_issue}`));
   const f = showFeature && features.find((x) => x.id === t.feature);
   return h('a', { class: `t is-${t.status}${open ? ' is-open' : ''}`, href: taskHref(slug, t.id), 'data-key': `t-${t.id}`, 'aria-current': open ? 'true' : null },
     h('span', { class: 'id' }, t.id), ' ', tags,
@@ -371,7 +373,7 @@ function taskDrawer(d, st, act, allTasks = []) {
             fact('Started by', t.assignee ? actorName(t.assignee) : ''), fact('Started', fmtDate(t.started_at)),
             fact('Completed', fmtDate(t.completed_at)), fact('Updated', fmtDate(t.updated_at)),
             h('dt', null, 'Version'), h('dd', null, String(t.version)),
-            t.github ? [h('dt', null, 'GitHub'), h('dd', null, h('a', { href: t.github, target: '_blank', rel: 'noopener noreferrer' }, t.github.replace('https://github.com/', '')))] : [])),
+            t.github ? [h('dt', null, 'GitHub'), h('dd', null, h('a', { href: t.github, target: '_blank', rel: 'noopener noreferrer' }, `Issue #${t.github_issue}`))] : [])),
         h('div', { class: 'section' }, h('h2', null, 'Evidence'),
           d.artifacts.length ? h('ul', { class: 'links evidence' }, d.artifacts.map((a) => h('li', null,
             h('span', { class: 'kind' }, a.kind), h('span', { class: 'mono' }, a.ref), a.summary ? h('div', { class: 'muted' }, a.summary) : null,
