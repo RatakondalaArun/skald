@@ -114,6 +114,7 @@ select, .btn, .search input {
 .tag { font-size: 11.5px; color: var(--ink-2); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 5px; margin-right: 4px; white-space: nowrap; }
 .tag.urgent { border-color: var(--blocked); color: var(--ink); font-weight: 600; }
 .tag.ready { border-color: var(--done); }
+.tag.gh { font-family: var(--mono); }
 
 /* list pages: projects, features */
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
@@ -132,6 +133,7 @@ button.card { cursor: pointer; }
 .feature-list .card-row { display: grid; grid-template-columns: minmax(0, 1fr) 180px 48px; gap: 4px 20px; align-items: center; }
 .feature-list .meta { margin-bottom: 0; }
 .feature-list .pct { text-align: right; font-weight: 600; }
+.feature-list .gh-link { display: inline-block; margin: 4px 0 0 2px; font-size: 13px; }
 @media (max-width: 640px) { .feature-list .card-row { grid-template-columns: minmax(0, 1fr) 44px; } .feature-list .card-row .bar-track { grid-column: 1 / -1; grid-row: 2; } }
 
 /* project page: header, tabs, body fill the window */

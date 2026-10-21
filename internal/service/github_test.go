@@ -622,3 +622,28 @@ func TestGitHubCreateIssuesFailureIsReportedAndRetried(t *testing.T) {
 		t.Fatalf("retry: %+v", res)
 	}
 }
+
+func TestGitHubLinks(t *testing.T) {
+	var none GitHubLinks
+	if n, url := none.Issue(domain.Task{ID: 1, IdempotencyKey: "github:acme/rocket#4"}); n != 4 || url != "https://github.com/acme/rocket/issues/4" {
+		t.Fatalf("synced task without links: %d %s", n, url)
+	}
+	p := domain.Project{Settings: domain.ProjectSettings{GitHub: &domain.GitHubSettings{
+		Repo:       "acme/rocket",
+		Milestones: map[string]int64{"0": 1, "3": 2},
+		Issues:     map[string]int{"7": 42},
+	}}}
+	l := NewGitHubLinks(p)
+	if n, url := l.Issue(domain.Task{ID: 7}); n != 42 || url != "https://github.com/acme/rocket/issues/42" {
+		t.Fatalf("created issue: %d %s", n, url)
+	}
+	if n, url := l.Issue(domain.Task{ID: 8, IdempotencyKey: "auth-login"}); n != 0 || url != "" {
+		t.Fatalf("unlinked task: %d %s", n, url)
+	}
+	if n, url := l.Milestone(2); n != 3 || url != "https://github.com/acme/rocket/milestone/3" {
+		t.Fatalf("milestone: %d %s", n, url)
+	}
+	if n, _ := l.Milestone(1); n != 0 {
+		t.Fatalf("the No milestone feature got milestone %d", n)
+	}
+}

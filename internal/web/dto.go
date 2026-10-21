@@ -85,6 +85,13 @@ type featureDTO struct {
 	Progress    progressDTO `json:"progress"`
 	Counts      countsDTO   `json:"counts"`
 	Counted     bool        `json:"counted"`
+	// GitHubMilestone and GitHubURL name the milestone the feature stands for.
+	GitHubMilestone int    `json:"github_milestone,omitempty"`
+	GitHubURL       string `json:"github_url,omitempty"`
+}
+
+func (d *featureDTO) linkGitHub(l service.GitHubLinks, featureID int64) {
+	d.GitHubMilestone, d.GitHubURL = l.Milestone(featureID)
 }
 
 type taskDTO struct {
@@ -106,11 +113,16 @@ type taskDTO struct {
 	CompletedAt        string `json:"completed_at,omitempty"`
 	UpdatedAt          string `json:"updated_at"`
 	CreatedAt          string `json:"created_at"`
-	GitHub             string `json:"github,omitempty"` // issue URL, for tasks synced from GitHub
+	GitHub             string `json:"github,omitempty"`       // issue URL
+	GitHubIssue        int    `json:"github_issue,omitempty"` // issue number
 }
 
-func taskOf(t domain.Task) taskDTO {
-	return taskDTO{
+// taskOf builds a task's DTO. Without the project's links only tasks synced
+// from GitHub get their issue; taskIn finds the issues Skald created too.
+func taskOf(t domain.Task) taskDTO { return taskIn(service.GitHubLinks{}, t) }
+
+func taskIn(l service.GitHubLinks, t domain.Task) taskDTO {
+	d := taskDTO{
 		ID: domain.FormatID(domain.EntityTask, t.ID), N: t.ID,
 		Feature: domain.FormatID(domain.EntityFeature, t.FeatureID),
 		Title:   t.Title, Description: t.Description, AcceptanceCriteria: t.AcceptanceCriteria,
@@ -118,14 +130,15 @@ func taskOf(t domain.Task) taskDTO {
 		BlockedReason: t.BlockedReason, Version: t.Version,
 		StartedAt: tsp(t.StartedAt), CompletedAt: tsp(t.CompletedAt),
 		UpdatedAt: ts(t.UpdatedAt), CreatedAt: ts(t.CreatedAt),
-		GitHub: service.GitHubIssueURL(t.IdempotencyKey),
 	}
+	d.GitHubIssue, d.GitHub = l.Issue(t)
+	return d
 }
 
-func tasksOf(ts []domain.Task) []taskDTO {
+func tasksIn(l service.GitHubLinks, ts []domain.Task) []taskDTO {
 	out := make([]taskDTO, 0, len(ts))
 	for _, t := range ts {
-		out = append(out, taskOf(t))
+		out = append(out, taskIn(l, t))
 	}
 	return out
 }
