@@ -214,6 +214,15 @@ a.tick:hover, a.tick:focus-visible { transform: translateY(-2px); }
 .saga .quote { display: block; color: var(--ink-2); font-style: italic; margin-top: 2px; }
 .saga .proj { font: 12px var(--sans); color: var(--muted); }
 .saga-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; color: var(--muted); }
+.notes { list-style: none; margin: 14px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.notes li { padding: 12px 2px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.note-head { font-size: 13px; color: var(--muted); }
+.note-head .id, .note-head a { font: 12px var(--mono); }
+.note-head .who { font-weight: 600; color: var(--ink); }
+.note-head time { margin-left: 6px; }
+.notes .prose { margin-top: 4px; white-space: pre-wrap; }
+.narrow > .formbox:first-child { margin-top: 0; margin-bottom: 14px; }
+.pair .actions { align-self: end; }
 
 /* links lists */
 .links { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }

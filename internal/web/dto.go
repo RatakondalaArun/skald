@@ -163,6 +163,26 @@ func documentOf(d domain.Document) documentDTO {
 	return documentDTO{ID: domain.FormatID(domain.EntityDocument, d.ID), Kind: d.Kind, Title: d.Title, Version: d.CurrentVersion}
 }
 
+type noteDTO struct {
+	ID      string `json:"id"`
+	Task    string `json:"task,omitempty"`
+	Feature string `json:"feature,omitempty"`
+	Body    string `json:"body"`
+	Actor   string `json:"actor"`
+	At      string `json:"at"`
+}
+
+func noteOf(n domain.Note) noteDTO {
+	d := noteDTO{ID: domain.FormatID(domain.EntityNote, n.ID), Body: n.Body, Actor: string(n.Actor), At: ts(n.CreatedAt)}
+	if n.TaskID != 0 {
+		d.Task = domain.FormatID(domain.EntityTask, n.TaskID)
+	}
+	if n.FeatureID != 0 {
+		d.Feature = domain.FormatID(domain.EntityFeature, n.FeatureID)
+	}
+	return d
+}
+
 type eventDTO struct {
 	ID         int64           `json:"id"`
 	Project    string          `json:"project,omitempty"`

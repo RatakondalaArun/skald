@@ -45,6 +45,7 @@ type Export struct {
 	Dependencies []ExportDependency `json:"dependencies"`
 	Artifacts    []ExportArtifact   `json:"artifacts"`
 	Documents    []ExportDocument   `json:"documents"`
+	Notes        []ExportNote       `json:"notes"`
 	Events       []ExportEvent      `json:"events"`
 }
 
@@ -132,6 +133,18 @@ type ExportDocumentVersion struct {
 	CreatedAt time.Time    `json:"created_at"`
 }
 
+// ExportNote is a scratchpad note. TaskID and FeatureID are 0 when unlinked.
+type ExportNote struct {
+	ID        int64        `json:"id"`
+	ShortID   string       `json:"short_id"`
+	ProjectID int64        `json:"project_id"`
+	TaskID    int64        `json:"task_id,omitempty"`
+	FeatureID int64        `json:"feature_id,omitempty"`
+	Body      string       `json:"body"`
+	Actor     domain.Actor `json:"actor"`
+	CreatedAt time.Time    `json:"created_at"`
+}
+
 type ExportEvent struct {
 	ID         int64             `json:"id"`
 	ProjectID  int64             `json:"project_id"`
@@ -178,7 +191,7 @@ func buildExport(r store.ExportRows, scope, skaldVersion string, schema int, now
 		ExportedAt: now.UTC().Format(time.RFC3339), SkaldVersion: skaldVersion, SchemaVersion: schema, Scope: scope,
 		// Empty slices, not null, so consumers can always range over them.
 		Projects: []ExportProject{}, Features: []ExportFeature{}, Tasks: []ExportTask{},
-		Dependencies: []ExportDependency{}, Artifacts: []ExportArtifact{}, Documents: []ExportDocument{}, Events: []ExportEvent{},
+		Dependencies: []ExportDependency{}, Artifacts: []ExportArtifact{}, Documents: []ExportDocument{}, Notes: []ExportNote{}, Events: []ExportEvent{},
 	}
 	for _, p := range r.Projects {
 		x.Projects = append(x.Projects, ExportProject{p.ID, short(domain.EntityProject, p.ID), p.Slug, p.Name, p.Description, p.Status, p.RepoPath, p.Settings, p.CreatedAt, p.UpdatedAt})
@@ -206,6 +219,9 @@ func buildExport(r store.ExportRows, scope, skaldVersion string, schema int, now
 			vs = []ExportDocumentVersion{}
 		}
 		x.Documents = append(x.Documents, ExportDocument{d.ID, short(domain.EntityDocument, d.ID), d.ProjectID, d.Kind, d.Title, d.CurrentVersion, vs})
+	}
+	for _, n := range r.Notes {
+		x.Notes = append(x.Notes, ExportNote{n.ID, short(domain.EntityNote, n.ID), n.ProjectID, n.TaskID, n.FeatureID, n.Body, n.Actor, n.CreatedAt})
 	}
 	for _, e := range r.Events {
 		payload := e.Payload
@@ -280,6 +296,9 @@ func (x *Export) rows() (store.ExportRows, error) {
 		for _, v := range d.Versions {
 			r.DocVersions = append(r.DocVersions, domain.DocumentVersion{DocumentID: d.ID, Version: v.Version, Body: v.Body, Actor: v.Actor, CreatedAt: v.CreatedAt})
 		}
+	}
+	for _, n := range x.Notes {
+		r.Notes = append(r.Notes, domain.Note{ID: n.ID, ProjectID: n.ProjectID, TaskID: n.TaskID, FeatureID: n.FeatureID, Body: n.Body, Actor: n.Actor, CreatedAt: n.CreatedAt})
 	}
 	for _, e := range x.Events {
 		if !e.EntityType.Valid() {

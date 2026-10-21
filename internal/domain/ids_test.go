@@ -6,7 +6,7 @@ import (
 )
 
 func TestFormatParseRoundTrip(t *testing.T) {
-	for _, e := range []EntityType{EntityProject, EntityFeature, EntityTask, EntityArtifact, EntityDocument} {
+	for _, e := range []EntityType{EntityProject, EntityFeature, EntityTask, EntityArtifact, EntityDocument, EntityNote} {
 		for _, id := range []int64{1, 7, 42, 1 << 40} {
 			s := FormatID(e, id)
 			got, err := ParseID(e, s)

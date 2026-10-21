@@ -12,6 +12,7 @@ var idPrefix = map[EntityType]string{
 	EntityTask:     "T",
 	EntityArtifact: "A",
 	EntityDocument: "D",
+	EntityNote:     "N",
 }
 
 var prefixEntity = func() map[string]EntityType {

@@ -79,10 +79,12 @@ type ProgressReport struct {
 }
 
 // ProjectSummary is what the MCP get_project tool returns: the progress report
-// plus the project's documents (without bodies).
+// plus the project's documents (without bodies) and how many scratchpad notes
+// it has.
 type ProjectSummary struct {
 	ProgressReport
 	Documents []domain.Document
+	NoteCount int
 }
 
 // NextTasks returns the ready tasks of a project (todo, every dependency done
@@ -139,7 +141,10 @@ func (s *Service) ProjectSummary(ctx context.Context, ref ProjectRef) (ProjectSu
 			return err
 		}
 		sum.ProgressReport = s.report(snap)
-		sum.Documents, err = store.ListDocuments(ctx, tx, p.ID, "")
+		if sum.Documents, err = store.ListDocuments(ctx, tx, p.ID, ""); err != nil {
+			return err
+		}
+		sum.NoteCount, err = store.CountNotes(ctx, tx, p.ID)
 		return err
 	})
 	return sum, err

@@ -19,6 +19,7 @@ type ExportRows struct {
 	Artifacts    []domain.Artifact
 	Documents    []domain.Document
 	DocVersions  []domain.DocumentVersion
+	Notes        []domain.Note
 	Events       []domain.Event
 }
 
@@ -65,6 +66,9 @@ func LoadExportRows(ctx context.Context, q Querier, projectID int64) (ExportRows
 		return r, err
 	}
 	if r.Documents, err = collect(ctx, q, scanDocument, `SELECT `+documentCols+` FROM documents`+w+` ORDER BY id`, a...); err != nil {
+		return r, err
+	}
+	if r.Notes, err = collect(ctx, q, scanNote, `SELECT `+noteCols+` FROM notes`+w+` ORDER BY id`, a...); err != nil {
 		return r, err
 	}
 	if r.Events, err = collect(ctx, q, scanEvent, `SELECT `+eventCols+` FROM events`+w+` ORDER BY id`, a...); err != nil {
@@ -164,6 +168,12 @@ func ImportExportRows(ctx context.Context, tx *sql.Tx, r ExportRows) error {
 	for _, v := range r.DocVersions {
 		if err := exec("document version", `INSERT INTO document_versions (document_id, version, body, actor, created_at) VALUES (?,?,?,?,?)`,
 			v.DocumentID, v.Version, v.Body, string(v.Actor), formatTime(v.CreatedAt)); err != nil {
+			return err
+		}
+	}
+	for _, n := range r.Notes {
+		if err := exec(fmt.Sprintf("note %d", n.ID), `INSERT INTO notes (`+noteCols+`) VALUES (?,?,?,?,?,?,?)`,
+			n.ID, n.ProjectID, nullID(n.TaskID), nullID(n.FeatureID), n.Body, string(n.Actor), formatTime(n.CreatedAt)); err != nil {
 			return err
 		}
 	}

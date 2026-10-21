@@ -46,7 +46,7 @@ type getDocArgs struct {
 
 func (s *server) registerRead(srv *mcp.Server) {
 	addTool(srv, s, "get_project",
-		"Project overview: progress, features, blocked work, documents and the evidence rule. Call at session start. Next: get_next_tasks or create_plan.",
+		"Project overview: progress, features, blocked work, documents, scratchpad note count and the evidence rule. Call at session start. Next: get_next_tasks or create_plan.",
 		true, func(ctx context.Context, actor domain.Actor, in projectArg) (any, error) {
 			sum, err := s.svc.ProjectSummary(ctx, s.ref(in.Project))
 			if err != nil {
@@ -68,6 +68,9 @@ func (s *server) registerRead(srv *mcp.Server) {
 			}
 			if len(docs) > 0 {
 				o["documents"] = docs
+			}
+			if sum.NoteCount > 0 {
+				o["notes"] = sum.NoteCount
 			}
 			return o, nil
 		})
