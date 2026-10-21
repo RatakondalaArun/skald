@@ -147,6 +147,7 @@ func (s *Server) apiProject(w http.ResponseWriter, r *http.Request) {
 		"blocked":     blocked,
 		"stale":       tasksIn(links, sum.Stale),
 		"documents":   docs,
+		"note_count":  sum.NoteCount,
 	})
 }
 
@@ -735,4 +736,78 @@ func (s *Server) apiGitHubSync(w http.ResponseWriter, r *http.Request) {
 		"create_failed":       note(res.CreateFailed),
 		"milestones_diverged": len(res.MilestonesDiverged),
 	})
+}
+
+// ---- scratchpad -------------------------------------------------------------
+
+// apiNotes lists a project's scratchpad notes, newest first. Filters: task,
+// feature, author, q (text), limit, offset.
+func (s *Server) apiNotes(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	var f service.NoteFilter
+	var err error
+	if v := q.Get("task"); v != "" {
+		if f.TaskID, err = domain.ParseID(domain.EntityTask, v); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	if v := q.Get("feature"); v != "" {
+		if f.FeatureID, err = domain.ParseID(domain.EntityFeature, v); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	if f.Limit, err = intParam(r, "limit", service.DefaultNoteLimit, 1, service.MaxNoteLimit); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if f.Offset, err = intParam(r, "offset", 0, 0, 1_000_000); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	f.Actor, f.Query = domain.Actor(strings.TrimSpace(q.Get("author"))), q.Get("q")
+	list, err := s.cfg.Service.ListNotes(r.Context(), ref(r), f)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	out := make([]noteDTO, 0, len(list.Notes))
+	for _, n := range list.Notes {
+		out = append(out, noteOf(n))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"notes": out, "truncated": list.Truncated})
+}
+
+// apiAddNote adds a note to the scratchpad as human:web.
+func (s *Server) apiAddNote(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Body    string `json:"body"`
+		Task    string `json:"task"`
+		Feature string `json:"feature"`
+	}
+	if !s.decodeBody(w, r, &body, `{"body": "staging tokens expire after 15 minutes", "task": "T-4"}`) {
+		return
+	}
+	var in service.AddNoteInput
+	var err error
+	if strings.TrimSpace(body.Task) != "" {
+		if in.TaskID, err = domain.ParseID(domain.EntityTask, body.Task); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	if strings.TrimSpace(body.Feature) != "" {
+		if in.FeatureID, err = domain.ParseID(domain.EntityFeature, body.Feature); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	in.Body = body.Body
+	n, err := s.cfg.Service.AddNote(r.Context(), webActor, ref(r), in)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"note": noteOf(n)})
 }

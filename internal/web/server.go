@@ -116,6 +116,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/projects/{slug}/documents", s.apiDocuments)
 	mux.HandleFunc("GET /api/projects/{slug}/document", s.apiDocument)
 	mux.HandleFunc("GET /api/projects/{slug}/events", s.apiProjectEvents)
+	mux.HandleFunc("GET /api/projects/{slug}/notes", s.apiNotes)
 	mux.HandleFunc("GET /api/events", s.apiEvents)
 	mux.HandleFunc("POST /api/projects/{slug}/tasks/{id}/unblock", s.mutating(s.apiTaskAction("unblock")))
 	mux.HandleFunc("POST /api/projects/{slug}/tasks/{id}/cancel", s.mutating(s.apiTaskAction("cancel")))
@@ -129,6 +130,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{slug}/tasks/{id}/dependencies/add", s.mutating(s.apiTaskDependency(true)))
 	mux.HandleFunc("POST /api/projects/{slug}/tasks/{id}/dependencies/remove", s.mutating(s.apiTaskDependency(false)))
 	mux.HandleFunc("POST /api/projects/{slug}/github/sync", s.mutating(s.apiGitHubSync))
+	mux.HandleFunc("POST /api/projects/{slug}/notes", s.mutating(s.apiAddNote))
 	mux.HandleFunc("GET /events", s.serveSSE)
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "not_found", "No such endpoint. See docs/ARCHITECTURE.md section 9 for the API.")

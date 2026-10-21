@@ -20,7 +20,7 @@ import (
 	"skald/internal/service"
 )
 
-const instructions = `Skald tracks this project's plan. Workflow: get_project, create_plan (give every task an idempotency_key), then loop get_next_tasks -> start_task -> add_task_note -> record_verification -> report_task_result. Progress is computed from task state; you cannot set it. A task cannot be completed without evidence.`
+const instructions = `Skald tracks this project's plan. Workflow: get_project, create_plan (give every task an idempotency_key), then loop get_next_tasks -> start_task -> add_task_note -> record_verification -> report_task_result. Progress is computed from task state; you cannot set it. A task cannot be completed without evidence. Keep a scratchpad with add_note (findings, open questions, where you left off) and read it with list_notes when you start.`
 
 type config struct {
 	cwd     string
@@ -73,6 +73,7 @@ func newServer(svc *service.Service, c config) *mcp.Server {
 	s.registerWrite(srv)
 	s.registerWork(srv)
 	s.registerGitHub(srv)
+	s.registerNotes(srv)
 	s.registerPrompts(srv)
 	return srv
 }

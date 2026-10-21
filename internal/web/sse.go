@@ -89,7 +89,7 @@ func (e *enricher) event(ctx context.Context, ev domain.Event) eventDTO {
 	switch ev.EntityType {
 	case domain.EntityTask:
 		taskID = ev.EntityID
-	case domain.EntityArtifact:
+	case domain.EntityArtifact, domain.EntityNote:
 		var p struct {
 			TaskID int64 `json:"task_id"`
 		}

@@ -92,12 +92,13 @@ const (
 	EntityTask     EntityType = "task"
 	EntityArtifact EntityType = "artifact"
 	EntityDocument EntityType = "document"
+	EntityNote     EntityType = "note"
 )
 
 // Valid reports whether e is a known entity type.
 func (e EntityType) Valid() bool {
 	switch e {
-	case EntityProject, EntityFeature, EntityTask, EntityArtifact, EntityDocument:
+	case EntityProject, EntityFeature, EntityTask, EntityArtifact, EntityDocument, EntityNote:
 		return true
 	}
 	return false
@@ -121,6 +122,7 @@ const (
 	EventTaskDepRemoved   EventType = "task.dependency_removed"
 	EventArtifactAdded    EventType = "artifact.added"
 	EventDocumentVersion  EventType = "document.version_added"
+	EventNoteAdded        EventType = "note.added"
 )
 
 var knownEventTypes = map[EventType]bool{
@@ -128,7 +130,7 @@ var knownEventTypes = map[EventType]bool{
 	EventFeatureCreated: true, EventFeatureUpdated: true, EventFeatureCancelled: true,
 	EventTaskCreated: true, EventTaskUpdated: true, EventTaskStatus: true, EventTaskNote: true,
 	EventTaskDepAdded: true, EventTaskDepRemoved: true,
-	EventArtifactAdded: true, EventDocumentVersion: true,
+	EventArtifactAdded: true, EventDocumentVersion: true, EventNoteAdded: true,
 }
 
 // Valid reports whether t is a known event type.
@@ -301,4 +303,18 @@ type DocumentVersion struct {
 	Body       string
 	Actor      Actor
 	CreatedAt  time.Time
+}
+
+// Note is a scratchpad entry: what an agent (or a person) wants to remember
+// about a project while working on it. Notes are append-only and never count
+// toward progress. TaskID and FeatureID are 0 when the note is not linked;
+// a note linked to a task is also linked to that task's feature.
+type Note struct {
+	ID        int64
+	ProjectID int64
+	TaskID    int64
+	FeatureID int64
+	Body      string
+	Actor     Actor
+	CreatedAt time.Time
 }

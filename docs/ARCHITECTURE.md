@@ -92,7 +92,7 @@ task_dependencies(
 
 events(                                                      -- append-only
   id INTEGER PRIMARY KEY AUTOINCREMENT,                      -- the change cursor
-  project_id INTEGER NOT NULL, entity_type TEXT NOT NULL,    -- project|feature|task|artifact|document
+  project_id INTEGER NOT NULL, entity_type TEXT NOT NULL,    -- project|feature|task|artifact|document|note
   entity_id INTEGER NOT NULL, type TEXT NOT NULL,            -- task.status_changed, task.note, ...
   actor TEXT NOT NULL,                                       -- human | claude:<session> | ...
   payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)
@@ -110,11 +110,27 @@ document_versions(
   document_id INTEGER NOT NULL REFERENCES documents, version INTEGER NOT NULL,
   body TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL,
   PRIMARY KEY (document_id, version))
+
+notes(                                                       -- the scratchpad; append-only
+  id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES projects,
+  task_id INTEGER REFERENCES tasks, feature_id INTEGER REFERENCES features,  -- optional links
+  body TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL)
 ```
 
-Indexes: `tasks(project_id, status)`, `tasks(feature_id)`, `task_dependencies(depends_on_id)`, `events(project_id, id)`, `artifacts(task_id)`.
+Indexes: `tasks(project_id, status)`, `tasks(feature_id)`, `task_dependencies(depends_on_id)`, `events(project_id, id)`, `artifacts(task_id)`, `notes(project_id, id)`, `notes(task_id)`, `notes(feature_id)`.
 
-Notes are events (`task.note`) with the text in `payload`, so there is no separate notes table. Documents are versioned because agents tend to rewrite them.
+Task notes are events (`task.note`) with the text in `payload`: they are part of a task's history and touch the task. Documents are versioned because agents tend to rewrite them.
+
+### 4.4 Scratchpad notes
+
+The `notes` table (migration `0002`) is a per-project scratchpad: what an agent wants to remember while it works that is not one task's progress. Rules, all in `store.AddNote` and `service.AddNote`:
+
+- Append-only. Triggers refuse `UPDATE` and `DELETE`, as on `events`. A correction is a new note.
+- A note may link a task of the same project, which also links that task's feature, or a feature of the same project. A task with a different feature is a validation error.
+- Writing a note appends one `note.added` event (entity `note`, short ID `N-n`) whose payload holds the first 280 characters and the links. It does not touch the task (no version bump, no `updated_at`), so it never affects progress, readiness or staleness.
+- Bodies are trimmed, required, and at most 20,000 characters. Lists are newest first and capped at 100; search is a case-insensitive (ASCII) substring match.
+
+Migration `0002` also rebuilds `events` to add `note` to its `entity_type` CHECK. Ids are copied unchanged, so the event cursor carries on, and the triggers and index are recreated.
 
 ### 4.1 Task state machine
 
@@ -205,6 +221,7 @@ Responses are compact: short text or terse JSON, with no decorative output. List
 | `record_verification` | Attach an artifact: commit, pr, test_report, link, manual |
 | `report_task_result` | Convenience: summary note + artifacts + complete in one call |
 | `get_document` / `put_document` | Requirements, architecture, conventions. Versioned |
+| `add_note` / `list_notes` / `get_note` | The scratchpad (section 4.4). `list_notes` filters by task, feature, author and text, and clips long bodies |
 
 `update_task_status` and `start_task` overlap on purpose: `start_task` is the obvious happy-path call for the model, and `update_task_status` covers everything else.
 
@@ -227,8 +244,9 @@ Views:
 2. **Project overview**: overall progress, features with progress, a task board (todo / in progress / blocked / done), and a ready-next list.
 3. **Task detail**: description, acceptance criteria, dependencies, artifacts, notes and event history.
 4. **Activity feed**: live, filterable by actor.
+5. **Scratchpad**: a project's notes, searchable and filterable by feature and author, with a form to add one.
 
-The dashboard is **read-mostly**. From the task drawer a human can start, block, unblock, complete (with the evidence gate, and a recorded override), cancel and reopen a task, and add notes and evidence. It can also edit a task's title, description, criteria, priority and weight, and add or remove its dependencies. Plans and features stay in the CLI and MCP. Every change goes through the same service-layer rules as the CLI, so the frontend stays thin.
+The dashboard is **read-mostly**. From the task drawer a human can start, block, unblock, complete (with the evidence gate, and a recorded override), cancel and reopen a task, and add notes and evidence. It can also add scratchpad notes. It can also edit a task's title, description, criteria, priority and weight, and add or remove its dependencies. Plans and features stay in the CLI and MCP. Every change goes through the same service-layer rules as the CLI, so the frontend stays thin.
 
 **Local security**: bind `127.0.0.1` by default. Reject requests whose `Host` is not the configured loopback host (DNS rebinding). Mutating endpoints require a per-process random token, delivered in the served HTML, and a matching `Origin` header. Refuse non-loopback `--addr` unless `--insecure-listen` is passed.
 

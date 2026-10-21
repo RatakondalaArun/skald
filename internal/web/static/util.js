@@ -101,6 +101,7 @@ export function eventLine(ev, { showProject = false } = {}) {
       else verb = `moved to ${p.to}`;
       break;
     case 'task.note': verb = inTask ? 'added a note' : 'noted on'; quote = p.text || ''; break;
+    case 'note.added': if (ev.task) { verb = 'wrote a scratchpad note on'; quote = p.text || ''; } break;
     case 'artifact.added': verb = inTask ? `recorded ${p.kind || 'evidence'} evidence` : `recorded ${p.kind || 'evidence'} on`; quote = p.ref || ''; break;
     default: break;
   }
@@ -123,6 +124,7 @@ export function eventLine(ev, { showProject = false } = {}) {
       case 'project.archived': body = ['archived the project']; break;
       case 'project.updated': body = ['updated the project']; break;
       case 'document.version_added': body = [`saved ${p.kind || 'document'} “${p.title || ''}” as version ${p.version}`]; break;
+      case 'note.added': body = ['wrote a scratchpad note']; quote = p.text || ''; break;
       default: body = [ev.type]; break;
     }
   }

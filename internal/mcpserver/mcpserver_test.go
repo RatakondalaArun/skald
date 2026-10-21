@@ -193,7 +193,7 @@ func TestToolListAndSchemas(t *testing.T) {
 		"create_project", "get_project", "get_project_progress", "create_plan", "create_feature", "list_features",
 		"create_task", "get_task", "list_tasks", "get_next_tasks", "start_task", "update_task_status",
 		"add_task_note", "add_task_dependency", "record_verification", "report_task_result", "get_document", "put_document",
-		"sync_github",
+		"sync_github", "add_note", "list_notes", "get_note",
 	}
 	var got []string
 	props := map[string]map[string]any{}

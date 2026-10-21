@@ -124,6 +124,7 @@ IDs are short IDs (`T-42`, `F-7`). Every tool except `create_project` takes an o
 | `record_verification` | Attach evidence: commit, pr, test_report, link or manual |
 | `report_task_result` | Note, evidence and done in one step. Nothing is written if it fails |
 | `get_document`, `put_document` | Versioned requirements, architecture, decisions, conventions |
+| `add_note`, `list_notes`, `get_note` | The project scratchpad (see below) |
 | `sync_github` | Pull milestones, issues, merged PRs and discussions from GitHub (see below) |
 
 There is also an MCP prompt, `skald_workflow`, that describes the loop.
@@ -134,6 +135,18 @@ There is also an MCP prompt, `skald_workflow`, that describes the loop.
 2. For new work: `create_plan`. Give **every task an `idempotency_key`**, so a retried call cannot duplicate tasks.
 3. Loop: `get_next_tasks`, `start_task`, `add_task_note` while working, then `report_task_result` with evidence.
 4. `get_project_progress` to see where things stand.
+5. Anything worth remembering that is not one task's progress (a gotcha, an open question, where you left off) goes in the scratchpad with `add_note`. The next session reads it with `list_notes`.
+
+### The scratchpad
+
+Each project has a scratchpad: append-only notes that agents (and you) keep while working, so the next session does not have to rediscover them.
+
+- A note is free text (up to 20,000 characters), recorded with its author (`claude:<client>/<session>`, `human`, or `human:web`) and time. It can be linked to a task (`T-4`) or a feature (`F-2`); a task link also links the task's feature.
+- Notes are never edited or deleted. To correct one, add another.
+- Notes never change task state or progress, and do not count as task activity for staleness. Progress notes about one task still belong in `add_task_note`; evidence still belongs in `record_verification`.
+- `list_notes` returns the newest 20 by default (up to 100), filtered by `task`, `feature`, `author` or `query` (text the note contains). Notes longer than 300 characters are clipped there; `get_note` returns the full text. `get_project` reports how many notes a project has.
+- From the CLI: `skald note add|list|show`. On the dashboard: the Scratchpad tab, where you can search, filter and add notes. Notes are included in `skald export` and `skald import`.
+
 
 ### The evidence gate
 
@@ -185,6 +198,7 @@ Global flags: `--json` (JSON output on read commands), `-p, --project <slug>`. S
 | `plan import <file\|->` | Import a JSON plan |
 | `github link [owner/name] [--unlink]`, `github sync [--repo] [--push] [--dry-run]` | Link a GitHub repository and sync it (see above) |
 | `evidence add <task>` | Attach evidence (`--kind`, `--ref`, `--summary`) |
+| `note add <text\|->`, `note list`, `note show <N-n>` | The project scratchpad (`add` takes `--task`, `--feature`; `list` takes `--task`, `--feature`, `--search`, `--author`, `--limit`) |
 | `next` | Tasks that can start now |
 | `status [--watch]` | Progress, blockers, ready and stale tasks |
 | `log [--follow] [--limit] [--since] [--all-projects]` | Event history |
@@ -209,7 +223,7 @@ Task lifecycle: `todo` to `in_progress` (needs all dependencies done or cancelle
 
 ## Dashboard security
 
-`skald serve` binds to `127.0.0.1:7331` and refuses any other address unless you pass `--insecure-listen`. There is no login. It rejects requests whose `Host` is not a loopback host (DNS rebinding). Changes (unblock, cancel, reopen) need a same-origin `Origin`, a per-process token and a JSON content type. The page sends a strict Content-Security-Policy. Dashboard changes are recorded as `human:web`.
+`skald serve` binds to `127.0.0.1:7331` and refuses any other address unless you pass `--insecure-listen`. There is no login. It rejects requests whose `Host` is not a loopback host (DNS rebinding). Changes (task actions and scratchpad notes) need a same-origin `Origin`, a per-process token and a JSON content type. The page sends a strict Content-Security-Policy. Dashboard changes are recorded as `human:web`.
 
 ## Architecture
 

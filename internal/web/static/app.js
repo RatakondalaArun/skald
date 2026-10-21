@@ -12,7 +12,7 @@ const token = document.querySelector('meta[name="skald-token"]')?.content || '';
 // UI state that survives re-renders (filters, pending actions) and the data of
 // the current view.
 const st = {
-  filters: { actor: '', feature: '', query: '', ready: false, showCancelled: false, showAllDone: false },
+  filters: { actor: '', feature: '', query: '', ready: false, showCancelled: false, showAllDone: false, noteQuery: '', noteFeature: '', noteActor: '' },
   confirmCancel: false,
   form: null, // which inline task form is open: block, done, note or evidence
   draft: {}, // text typed into those forms
@@ -59,7 +59,7 @@ function parseRoute() {
   if (parts[0] === 'p' && parts[1]) {
     if (parts[2] === 't' && parts[3]) return { name: 'task', slug: parts[1], id: parts[3] };
     if (parts[2] === 'doc' && parts[3] && parts[4]) return { name: 'doc', slug: parts[1], kind: parts[3], title: parts[4] };
-    const view = ['features', 'activity', 'docs'].includes(parts[2]) ? parts[2] : 'board';
+    const view = ['features', 'notes', 'activity', 'docs'].includes(parts[2]) ? parts[2] : 'board';
     return { name: 'project', slug: parts[1], view };
   }
   return { name: 'projects' };
@@ -71,8 +71,9 @@ async function loadData(r) {
     case 'activity': return { feed: (await api('/api/events?limit=100')).events.reverse() };
     case 'project': {
       const base = `/api/projects/${enc(r.slug)}`;
-      const [summary, board, ev] = await Promise.all([api(base), api(`${base}/board`), api(`${base}/events?limit=80`)]);
-      return { summary, board, feed: ev.events.reverse() };
+      const [summary, board, ev, notes] = await Promise.all([api(base), api(`${base}/board`), api(`${base}/events?limit=80`),
+        r.view === 'notes' ? api(`${base}/notes?limit=100`) : null]);
+      return { summary, board, feed: ev.events.reverse(), notes };
     }
     case 'task': {
       const base = `/api/projects/${enc(r.slug)}`;
@@ -94,7 +95,7 @@ async function navigate() {
     st.confirmCancel = false;
     st.form = null;
     st.draft = {};
-    if (next.slug !== route.slug) Object.assign(st.filters, { feature: '', query: '', ready: false });
+    if (next.slug !== route.slug) Object.assign(st.filters, { feature: '', query: '', ready: false, noteQuery: '', noteFeature: '', noteActor: '' });
   }
   const prev = route;
   route = next;
@@ -232,8 +233,24 @@ async function githubSync() {
   await refresh({ hard: true });
 }
 
+async function addNote(body) {
+  st.busy = true;
+  render();
+  try {
+    const r = await api(`/api/projects/${enc(route.slug)}/notes`, { method: 'POST', body: JSON.stringify(body) });
+    toast(`${r.note.id} added to the scratchpad.`);
+    st.draft = {};
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    st.busy = false;
+  }
+  await refresh({ hard: true });
+}
+
 async function taskAction(action, t, extra) {
   if (action === 'github-sync') { await githubSync(); return; }
+  if (action === 'note-add') { await addNote(extra); return; }
   if (action === 'cancel-ask') { st.confirmCancel = true; render(); return; }
   if (action === 'cancel-no') { st.confirmCancel = false; render(); return; }
   if (action === 'form') {

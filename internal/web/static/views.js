@@ -215,7 +215,64 @@ export function sagaList(events, st, rerender, { showProject = false, limit = 25
       : h('p', { class: 'empty' }, events.length ? 'No activity from that actor.' : 'Nothing has happened yet. Activity appears here as Claude plans and works.'));
 }
 
-const TABS = [['board', 'Board'], ['features', 'Features'], ['activity', 'Activity'], ['docs', 'Documents']];
+// ---- scratchpad --------------------------------------------------------------
+
+function scratchpad(slug, notes, truncated, features, tasks, st, rerender, act) {
+  const f = st.filters;
+  const dr = st.draft;
+  const q = f.noteQuery.trim().toLowerCase();
+  const featureTitle = new Map(features.map((x) => [x.id, x.title]));
+  const taskTitle = new Map(tasks.map((x) => [x.id, x.title]));
+  const actors = [...new Set(notes.map((n) => n.actor))].sort();
+  const shown = notes.filter((n) => (!f.noteFeature || n.feature === f.noteFeature)
+    && (!f.noteActor || n.actor === f.noteActor)
+    && (!q || `${n.id} ${n.task || ''} ${n.body}`.toLowerCase().includes(q)));
+
+  const search = h('div', { class: 'search' },
+    h('input', {
+      type: 'search', id: 'note-search', placeholder: 'Search notes', 'aria-label': 'Search notes',
+      'data-key': 'note-search', value: f.noteQuery, autocomplete: 'off',
+      oninput: (e) => { f.noteQuery = e.target.value; rerender(); },
+    }));
+  const featureSel = features.length > 1 ? h('select', {
+    'aria-label': 'Feature', 'data-key': 'note-feature',
+    onchange: (e) => { f.noteFeature = e.target.value; rerender(); },
+  }, h('option', { value: '' }, 'All features'), features.map((x) => h('option', { value: x.id, selected: x.id === f.noteFeature ? true : null }, x.title))) : null;
+  const actorSel = actors.length > 1 ? h('select', {
+    'aria-label': 'Written by', 'data-key': 'note-actor',
+    onchange: (e) => { f.noteActor = e.target.value; rerender(); },
+  }, h('option', { value: '' }, 'Everyone'), actors.map((a) => h('option', { value: a, selected: a === f.noteActor ? true : null }, actorName(a)))) : null;
+
+  const dis = st.busy ? true : null;
+  const addForm = h('form', { class: 'formbox', onsubmit: (e) => { e.preventDefault(); act('note-add', null, { body: dr.noteBody || '', task: dr.noteTask || '' }); } },
+    h('label', { class: 'field' }, 'Add to the scratchpad',
+      h('textarea', { rows: '3', required: true, 'data-key': 'f-note-body', placeholder: 'A finding, an open question, or where you left off', oninput: (e) => { dr.noteBody = e.target.value; } }, dr.noteBody || '')),
+    h('div', { class: 'pair' },
+      h('label', { class: 'field' }, 'About task (optional)',
+        h('input', { type: 'text', list: 'note-task-options', placeholder: 'T-12', value: dr.noteTask || '', 'data-key': 'f-note-task', autocomplete: 'off', oninput: (e) => { dr.noteTask = e.target.value; } }),
+        h('datalist', { id: 'note-task-options' }, tasks.filter((x) => x.status !== 'cancelled').map((x) => h('option', { value: x.id }, x.title)))),
+      h('div', { class: 'actions' }, h('button', { type: 'submit', class: 'btn primary', 'data-key': 'f-note-submit', disabled: dis }, 'Add note'))));
+
+  const item = (n) => h('li', { class: 'note' },
+    h('div', { class: 'note-head' },
+      h('span', { class: 'id' }, n.id), ' ',
+      h('span', { class: 'who', title: n.actor }, actorName(n.actor)),
+      n.task ? [' on ', h('a', { href: taskHref(slug, n.task) }, n.task), taskTitle.has(n.task) ? ` ${taskTitle.get(n.task)}` : '']
+        : n.feature ? [' on ', featureTitle.get(n.feature) || n.feature] : null,
+      ' ', timeEl(n.at)),
+    h('p', { class: 'prose' }, n.body));
+
+  const filtered = q || f.noteFeature || f.noteActor;
+  return h('div', { class: 'narrow' },
+    addForm,
+    notes.length ? h('div', { class: 'toolbar' }, search, featureSel, actorSel) : null,
+    shown.length
+      ? h('ol', { class: 'notes', style: { listStyle: 'none' } }, shown.map(item))
+      : h('p', { class: 'empty' }, filtered ? 'No matching notes.' : 'The scratchpad is empty. Claude keeps notes here with add_note: findings, open questions and where it left off.'),
+    truncated ? h('p', { class: 'muted' }, 'Showing the newest 100 notes. Use skald note list --search for older ones.') : null);
+}
+
+const TABS = [['board', 'Board'], ['features', 'Features'], ['notes', 'Scratchpad'], ['activity', 'Activity'], ['docs', 'Documents']];
 
 export function projectView(d, st, rerender, route, act) {
   const { summary, board: b, feed } = d;
@@ -227,13 +284,14 @@ export function projectView(d, st, rerender, route, act) {
   const parts = [];
   parts.push(countable ? `${c.done} of ${plural(countable, 'task')} done` : 'No tasks yet');
   if (summary.ready_count) parts.push(`${summary.ready_count} ready to start`);
-  const counts = { board: countable, features: summary.features.length, activity: null, docs: docs.length || null };
+  const counts = { board: countable, features: summary.features.length, notes: summary.note_count || null, activity: null, docs: docs.length || null };
   const slugEnc = encodeURIComponent(p.slug);
 
   let body;
   let fill = false;
   if (view === 'features') body = h('div', null, featureList(p.slug, summary.features, st, rerender));
   else if (view === 'activity') body = h('div', { class: 'narrow' }, sagaList(feed, st, rerender, { limit: 100 }));
+  else if (view === 'notes') body = scratchpad(p.slug, d.notes?.notes || [], !!d.notes?.truncated, summary.features, b.tasks, st, rerender, act);
   else if (view === 'docs') {
     body = docs.length
       ? h('div', { class: 'narrow' }, h('ul', { class: 'links' }, docs.map((x) => h('li', null, h('a', { href: `#/p/${slugEnc}/doc/${encodeURIComponent(x.kind)}/${encodeURIComponent(x.title)}` },
