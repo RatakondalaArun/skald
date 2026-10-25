@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"database/sql"
+	"slices"
+	"strings"
 
 	"skald/internal/domain"
 	"skald/internal/store"
@@ -127,18 +129,43 @@ type TaskEdit struct {
 	AcceptanceCriteria *string
 	Priority           *int
 	Weight             *int
-	ExpectedVersion    int64 // 0 skips the optimistic-concurrency check
+	// Tags replaces the task's tags when non-nil (an empty slice clears
+	// them). AddTags and RemoveTags are applied after it, so callers can
+	// change a few tags without reading the current set first.
+	Tags            *[]string
+	AddTags         []string
+	RemoveTags      []string
+	ExpectedVersion int64 // 0 skips the optimistic-concurrency check
 }
 
-// UpdateTask edits a task's title, description, acceptance criteria, priority
-// or weight. It works in any status and records one task.updated event naming
+// UpdateTask edits a task's title, description, acceptance criteria, priority,
+// weight or tags. It works in any status and records one task.updated event naming
 // the fields that changed. An edit that changes nothing writes nothing.
 func (s *Service) UpdateTask(ctx context.Context, actor domain.Actor, taskID int64, e TaskEdit) (domain.Task, error) {
+	return s.updateTask(ctx, actor, 0, taskID, e)
+}
+
+// TagTask adds and removes tags on a task of the resolved project. A task
+// from another project is NotFound. Removing a tag the task does not carry is
+// not an error, and a change that leaves the tags as they were writes nothing.
+func (s *Service) TagTask(ctx context.Context, actor domain.Actor, ref ProjectRef, taskID int64, add, remove []string) (domain.Task, error) {
+	p, err := s.ResolveProject(ctx, ref)
+	if err != nil {
+		return domain.Task{}, err
+	}
+	return s.updateTask(ctx, actor, p.ID, taskID, TaskEdit{AddTags: add, RemoveTags: remove})
+}
+
+// updateTask is UpdateTask limited to one project; projectID 0 allows any.
+func (s *Service) updateTask(ctx context.Context, actor domain.Actor, projectID, taskID int64, e TaskEdit) (domain.Task, error) {
 	var out domain.Task
 	err := s.db.WriteTx(ctx, func(tx *sql.Tx) error {
 		cur, err := store.GetTask(ctx, tx, taskID)
 		if err != nil {
 			return err
+		}
+		if projectID != 0 && cur.ProjectID != projectID {
+			return &domain.NotFoundError{Entity: domain.EntityTask, ID: taskID}
 		}
 		p := store.TaskPatch{}
 		differs := func(old string, v *string) *string {
@@ -156,11 +183,77 @@ func (s *Service) UpdateTask(ctx context.Context, actor domain.Actor, taskID int
 		if e.Weight != nil && *e.Weight != cur.Weight {
 			p.Weight = e.Weight
 		}
+		if e.Tags != nil || len(e.AddTags) > 0 || len(e.RemoveTags) > 0 {
+			tags, err := editTags(cur.Tags, e)
+			if err != nil {
+				return err
+			}
+			if !slices.Equal(tags, cur.Tags) {
+				p.Tags = &tags
+			}
+		}
 		out, err = store.UpdateTaskFields(ctx, tx, s.meta(actor), taskID, e.ExpectedVersion, p)
 		return err
 	})
 	if err != nil {
 		return domain.Task{}, err
 	}
+	return out, nil
+}
+
+// editTags applies a TaskEdit's tag changes to the current tags.
+func editTags(cur []string, e TaskEdit) ([]string, error) {
+	base := cur
+	if e.Tags != nil {
+		base = *e.Tags
+	}
+	remove, err := domain.NormalizeTags(e.RemoveTags)
+	if err != nil {
+		return nil, err
+	}
+	var next []string
+	for _, t := range append(slices.Clone(base), e.AddTags...) {
+		n, err := domain.NormalizeTag(t)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(remove, n) {
+			next = append(next, n)
+		}
+	}
+	return domain.NormalizeTags(next)
+}
+
+// TagCount is a tag and the number of tasks that carry it.
+type TagCount struct {
+	Tag   string
+	Tasks int
+}
+
+// ListTags returns the tags used in the resolved project, most used first,
+// then by name.
+func (s *Service) ListTags(ctx context.Context, actor domain.Actor, ref ProjectRef) ([]TagCount, error) {
+	p, err := s.ResolveProject(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	var counts map[string]int
+	err = s.db.ReadTx(ctx, func(tx *sql.Tx) (err error) {
+		counts, err = store.ProjectTagCounts(ctx, tx, p.ID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TagCount, 0, len(counts))
+	for t, n := range counts {
+		out = append(out, TagCount{Tag: t, Tasks: n})
+	}
+	slices.SortFunc(out, func(a, b TagCount) int {
+		if a.Tasks != b.Tasks {
+			return b.Tasks - a.Tasks
+		}
+		return strings.Compare(a.Tag, b.Tag)
+	})
 	return out, nil
 }

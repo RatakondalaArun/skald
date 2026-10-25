@@ -39,6 +39,7 @@ type planTask struct {
 	DependsOn          []string `json:"depends_on,omitempty" jsonschema:"refs of tasks in this plan that must finish first"`
 	DependsOnExisting  []string `json:"depends_on_existing,omitempty" jsonschema:"IDs (T-n) of existing tasks that must finish first"`
 	IdempotencyKey     string   `json:"idempotency_key,omitempty" jsonschema:"stable unique key; makes retries and re-runs safe"`
+	Tags               []string `json:"tags,omitempty" jsonschema:"free-form labels such as backend or ui"`
 }
 
 type createFeatureArgs struct {
@@ -50,13 +51,21 @@ type createFeatureArgs struct {
 
 type createTaskArgs struct {
 	projectArg
-	Feature            string `json:"feature" jsonschema:"feature ID such as F-3"`
-	Title              string `json:"title"`
-	Description        string `json:"description,omitempty"`
-	AcceptanceCriteria string `json:"acceptance_criteria,omitempty"`
-	Priority           string `json:"priority,omitempty" jsonschema:"urgent, high, normal (default) or low"`
-	Weight             int    `json:"weight,omitempty" jsonschema:"relative size 1-10, default 1"`
-	IdempotencyKey     string `json:"idempotency_key,omitempty" jsonschema:"stable unique key; repeating it returns the existing task"`
+	Feature            string   `json:"feature" jsonschema:"feature ID such as F-3"`
+	Title              string   `json:"title"`
+	Description        string   `json:"description,omitempty"`
+	AcceptanceCriteria string   `json:"acceptance_criteria,omitempty"`
+	Priority           string   `json:"priority,omitempty" jsonschema:"urgent, high, normal (default) or low"`
+	Weight             int      `json:"weight,omitempty" jsonschema:"relative size 1-10, default 1"`
+	IdempotencyKey     string   `json:"idempotency_key,omitempty" jsonschema:"stable unique key; repeating it returns the existing task"`
+	Tags               []string `json:"tags,omitempty" jsonschema:"free-form labels such as backend or ui"`
+}
+
+type tagArgs struct {
+	projectArg
+	Task   string   `json:"task" jsonschema:"task ID such as T-42"`
+	Add    []string `json:"add,omitempty" jsonschema:"tags to add"`
+	Remove []string `json:"remove,omitempty" jsonschema:"tags to remove"`
 }
 
 type depArgs struct {
@@ -109,7 +118,7 @@ func (s *server) registerWrite(srv *mcp.Server) {
 					}
 					pt := service.PlanTask{
 						Ref: t.Ref, Title: t.Title, Description: t.Description, AcceptanceCriteria: t.AcceptanceCriteria,
-						Priority: prio, Weight: t.Weight, DependsOn: t.DependsOn, IdempotencyKey: t.IdempotencyKey,
+						Priority: prio, Weight: t.Weight, DependsOn: t.DependsOn, IdempotencyKey: t.IdempotencyKey, Tags: t.Tags,
 					}
 					for _, e := range t.DependsOnExisting {
 						id, err := taskID(e)
@@ -176,12 +185,30 @@ func (s *server) registerWrite(srv *mcp.Server) {
 			}
 			t, created, err := s.svc.CreateTask(ctx, actor, service.ProjectRef{Slug: p.Slug, Cwd: s.cwd}, service.CreateTaskInput{
 				FeatureID: fidn, Title: in.Title, Description: in.Description, AcceptanceCriteria: in.AcceptanceCriteria,
-				Priority: prio, Weight: in.Weight, IdempotencyKey: in.IdempotencyKey,
+				Priority: prio, Weight: in.Weight, IdempotencyKey: in.IdempotencyKey, Tags: in.Tags,
 			})
 			if err != nil {
 				return nil, err
 			}
 			return obj{"project": p.Slug, "task": line(t), "created": created}, nil
+		})
+
+	addTool(srv, s, "tag_task",
+		"Add or remove tags on a task. Tags are lowercase labels (a-z, 0-9, - _ . : /). Next: list_tasks with tags.",
+		false, func(ctx context.Context, actor domain.Actor, in tagArgs) (any, error) {
+			id, err := taskID(in.Task)
+			if err != nil {
+				return nil, err
+			}
+			p, err := s.svc.ResolveProject(ctx, s.ref(in.Project))
+			if err != nil {
+				return nil, err
+			}
+			t, err := s.svc.TagTask(ctx, actor, service.ProjectRef{Slug: p.Slug, Cwd: s.cwd}, id, in.Add, in.Remove)
+			if err != nil {
+				return nil, err
+			}
+			return obj{"project": p.Slug, "task": line(t)}, nil
 		})
 
 	addTool(srv, s, "add_task_dependency",

@@ -67,6 +67,7 @@ type planTaskFile struct {
 	DependsOn          []string     `json:"depends_on"`
 	DependsOnExisting  []existingID `json:"depends_on_existing"`
 	IdempotencyKey     string       `json:"idempotency_key"`
+	Tags               []string     `json:"tags"`
 }
 
 // existingID accepts a task ID as "T-3", "3" or the number 3.
@@ -107,6 +108,7 @@ func parsePlan(data []byte) (service.PlanInput, error) {
 			t := service.PlanTask{
 				Ref: pt.Ref, Title: pt.Title, Description: pt.Description, AcceptanceCriteria: pt.AcceptanceCriteria,
 				Priority: pt.Priority, Weight: pt.Weight, DependsOn: pt.DependsOn, IdempotencyKey: pt.IdempotencyKey,
+				Tags: pt.Tags,
 			}
 			for _, id := range pt.DependsOnExisting {
 				t.DependsOnExisting = append(t.DependsOnExisting, int64(id))

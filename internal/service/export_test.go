@@ -48,6 +48,7 @@ func expPopulate(t *testing.T, e *e2eEnv) domain.Project {
 	e2eOK(e.svc.StartTask(e2eCtx, agent, id("b"), 0))
 	e2eOK(e.svc.UpdateTaskStatus(e2eCtx, agent, id("b"), StatusChange{To: domain.TaskBlocked, BlockedReason: "waiting on API key"}))
 	e2eOK(e.svc.StartTask(e2eCtx, domain.Human, id("c"), 0))
+	e2eOK(e.svc.TagTask(e2eCtx, agent, ref, id("c"), []string{"backend", "UI"}, nil))
 	e2eOK(e.svc.UpdateTaskStatus(e2eCtx, domain.Human, id("j"), StatusChange{To: domain.TaskCancelled}))
 	for _, d := range []struct {
 		who  domain.Actor

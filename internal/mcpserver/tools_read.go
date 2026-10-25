@@ -28,6 +28,7 @@ type listTasksArgs struct {
 	Feature string   `json:"feature,omitempty" jsonschema:"only tasks of this feature, e.g. F-3"`
 	Status  []string `json:"status,omitempty" jsonschema:"only these statuses: todo, in_progress, blocked, done, cancelled"`
 	Ready   bool     `json:"ready,omitempty" jsonschema:"only ready tasks (todo, all dependencies done)"`
+	Tags    []string `json:"tags,omitempty" jsonschema:"only tasks carrying every one of these tags"`
 	Limit   int      `json:"limit,omitempty" jsonschema:"max results, default 50, cap 100"`
 	Offset  int      `json:"offset,omitempty" jsonschema:"skip this many results"`
 }
@@ -131,6 +132,9 @@ func (s *server) registerRead(srv *mcp.Server) {
 			if t.AcceptanceCriteria != "" {
 				o["acceptance_criteria"] = t.AcceptanceCriteria
 			}
+			if len(t.Tags) > 0 {
+				o["tags"] = t.Tags
+			}
 			if u := service.GitHubIssueURL(t.IdempotencyKey); u != "" {
 				o["github"] = u
 			}
@@ -180,13 +184,13 @@ func (s *server) registerRead(srv *mcp.Server) {
 		})
 
 	addTool(srv, s, "list_tasks",
-		"List tasks, filterable by feature, status or ready. Capped; says when truncated. Next: get_task or start_task.",
+		"List tasks, filterable by feature, status, tags or ready. Capped; says when truncated. Next: get_task or start_task.",
 		true, func(ctx context.Context, actor domain.Actor, in listTasksArgs) (any, error) {
 			p, err := s.svc.ResolveProject(ctx, s.ref(in.Project))
 			if err != nil {
 				return nil, err
 			}
-			f := service.ListTasksFilter{ReadyOnly: in.Ready, Offset: in.Offset, Limit: in.Limit}
+			f := service.ListTasksFilter{ReadyOnly: in.Ready, Tags: in.Tags, Offset: in.Offset, Limit: in.Limit}
 			if f.Limit == 0 {
 				f.Limit = service.DefaultListLimit
 			}
@@ -215,6 +219,24 @@ func (s *server) registerRead(srv *mcp.Server) {
 				o["note"] = listNote
 			}
 			return o, nil
+		})
+
+	addTool(srv, s, "list_tags",
+		"Tags used in the project with how many tasks carry each, most used first. Next: list_tasks with tags.",
+		true, func(ctx context.Context, actor domain.Actor, in projectArg) (any, error) {
+			p, err := s.svc.ResolveProject(ctx, s.ref(in.Project))
+			if err != nil {
+				return nil, err
+			}
+			tags, err := s.svc.ListTags(ctx, actor, service.ProjectRef{Slug: p.Slug, Cwd: s.cwd})
+			if err != nil {
+				return nil, err
+			}
+			out := make([]obj, len(tags))
+			for i, t := range tags {
+				out[i] = obj{"tag": t.Tag, "tasks": t.Tasks}
+			}
+			return obj{"project": p.Slug, "tags": out}, nil
 		})
 
 	addTool(srv, s, "get_next_tasks",

@@ -12,7 +12,7 @@ const token = document.querySelector('meta[name="skald-token"]')?.content || '';
 // UI state that survives re-renders (filters, pending actions) and the data of
 // the current view.
 const st = {
-  filters: { actor: '', feature: '', query: '', ready: false, showCancelled: false, showAllDone: false },
+  filters: { actor: '', feature: '', tag: '', query: '', ready: false, showCancelled: false, showAllDone: false },
   confirmCancel: false,
   form: null, // which inline task form is open: block, done, note or evidence
   draft: {}, // text typed into those forms
@@ -94,7 +94,7 @@ async function navigate() {
     st.confirmCancel = false;
     st.form = null;
     st.draft = {};
-    if (next.slug !== route.slug) Object.assign(st.filters, { feature: '', query: '', ready: false });
+    if (next.slug !== route.slug) Object.assign(st.filters, { feature: '', tag: '', query: '', ready: false });
   }
   const prev = route;
   route = next;
@@ -237,7 +237,7 @@ async function taskAction(action, t, extra) {
   if (action === 'cancel-ask') { st.confirmCancel = true; render(); return; }
   if (action === 'cancel-no') { st.confirmCancel = false; render(); return; }
   if (action === 'form') {
-    st.draft = extra === 'edit' ? { title: t.title, description: t.description || '', criteria: t.acceptance_criteria || '', priority: String(t.priority), weight: String(t.weight) } : {};
+    st.draft = extra === 'edit' ? { title: t.title, description: t.description || '', criteria: t.acceptance_criteria || '', priority: String(t.priority), weight: String(t.weight), tags: (t.tags || []).join(', ') } : {};
     st.form = extra; st.confirmCancel = false; render(); const box = document.querySelector('.formbox');
     box?.scrollIntoView({ block: 'nearest' });
     box?.querySelector('[data-key^="f-"]')?.focus({ preventScroll: true });

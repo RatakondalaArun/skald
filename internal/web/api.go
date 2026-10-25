@@ -266,6 +266,13 @@ func (s *Server) apiTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Statuses = append(f.Statuses, ts)
 	}
+	for _, tag := range q["tag"] {
+		for _, t := range strings.Split(tag, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				f.Tags = append(f.Tags, t)
+			}
+		}
+	}
 	list, err := s.cfg.Service.ListTasks(r.Context(), webActor, ref(r), f)
 	if err != nil {
 		s.fail(w, r, err)
@@ -609,8 +616,8 @@ func (s *Server) apiTaskEvidence(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"artifact": art.ID})
 }
 
-// apiTaskEdit changes a task's title, description, criteria, priority or
-// weight. Only the fields present in the body change.
+// apiTaskEdit changes a task's title, description, criteria, priority, weight
+// or tags. Only the fields present in the body change; tags replaces the set.
 func (s *Server) apiTaskEdit(w http.ResponseWriter, r *http.Request) {
 	id, err := taskID(r)
 	if err != nil {
@@ -618,14 +625,15 @@ func (s *Server) apiTaskEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ExpectedVersion    int64   `json:"expected_version"`
-		Title              *string `json:"title"`
-		Description        *string `json:"description"`
-		AcceptanceCriteria *string `json:"acceptance_criteria"`
-		Priority           *int    `json:"priority"`
-		Weight             *int    `json:"weight"`
+		ExpectedVersion    int64     `json:"expected_version"`
+		Title              *string   `json:"title"`
+		Description        *string   `json:"description"`
+		AcceptanceCriteria *string   `json:"acceptance_criteria"`
+		Priority           *int      `json:"priority"`
+		Weight             *int      `json:"weight"`
+		Tags               *[]string `json:"tags"`
 	}
-	if !s.decodeBody(w, r, &body, `{"expected_version": 3, "title": "New title", "priority": 1}`) {
+	if !s.decodeBody(w, r, &body, `{"expected_version": 3, "title": "New title", "priority": 1, "tags": ["ui"]}`) {
 		return
 	}
 	if body.ExpectedVersion < 0 {
@@ -645,7 +653,7 @@ func (s *Server) apiTaskEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.cfg.Service.UpdateTask(r.Context(), webActor, id, service.TaskEdit{
 		Title: trim(body.Title), Description: trim(body.Description), AcceptanceCriteria: trim(body.AcceptanceCriteria),
-		Priority: body.Priority, Weight: body.Weight, ExpectedVersion: body.ExpectedVersion,
+		Priority: body.Priority, Weight: body.Weight, Tags: body.Tags, ExpectedVersion: body.ExpectedVersion,
 	})
 	if err != nil {
 		s.fail(w, r, err)

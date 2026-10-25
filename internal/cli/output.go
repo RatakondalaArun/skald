@@ -53,20 +53,21 @@ type featureJSON struct {
 }
 
 type taskJSON struct {
-	ID                 string `json:"id"`
-	Feature            string `json:"feature"`
-	Title              string `json:"title"`
-	Description        string `json:"description,omitempty"`
-	AcceptanceCriteria string `json:"acceptance_criteria,omitempty"`
-	Status             string `json:"status"`
-	Priority           int    `json:"priority"`
-	Weight             int    `json:"weight"`
-	Assignee           string `json:"assignee,omitempty"`
-	BlockedReason      string `json:"blocked_reason,omitempty"`
-	Version            int64  `json:"version"`
-	StartedAt          string `json:"started_at,omitempty"`
-	CompletedAt        string `json:"completed_at,omitempty"`
-	UpdatedAt          string `json:"updated_at"`
+	ID                 string   `json:"id"`
+	Feature            string   `json:"feature"`
+	Title              string   `json:"title"`
+	Description        string   `json:"description,omitempty"`
+	AcceptanceCriteria string   `json:"acceptance_criteria,omitempty"`
+	Status             string   `json:"status"`
+	Priority           int      `json:"priority"`
+	Weight             int      `json:"weight"`
+	Assignee           string   `json:"assignee,omitempty"`
+	BlockedReason      string   `json:"blocked_reason,omitempty"`
+	Tags               []string `json:"tags,omitempty"`
+	Version            int64    `json:"version"`
+	StartedAt          string   `json:"started_at,omitempty"`
+	CompletedAt        string   `json:"completed_at,omitempty"`
+	UpdatedAt          string   `json:"updated_at"`
 }
 
 type artifactJSON struct {
@@ -149,7 +150,7 @@ func toTask(t domain.Task) taskJSON {
 		ID: taskID(t.ID), Feature: featureID(t.FeatureID), Title: t.Title, Description: t.Description,
 		AcceptanceCriteria: t.AcceptanceCriteria, Status: string(t.Status), Priority: t.Priority,
 		Weight: t.Weight, Assignee: t.Assignee, BlockedReason: t.BlockedReason, Version: t.Version,
-		StartedAt: tsp(t.StartedAt), CompletedAt: tsp(t.CompletedAt), UpdatedAt: ts(t.UpdatedAt),
+		Tags: t.Tags, StartedAt: tsp(t.StartedAt), CompletedAt: tsp(t.CompletedAt), UpdatedAt: ts(t.UpdatedAt),
 	}
 }
 

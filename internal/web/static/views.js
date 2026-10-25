@@ -130,10 +130,11 @@ function taskCard(slug, t, { showFeature, features, open }) {
   else if (t.priority === 1) tags.push(h('span', { class: 'tag' }, 'high'));
   if (t.ready) tags.push(h('span', { class: 'tag ready' }, 'ready'));
   if (t.github_issue) tags.push(h('span', { class: 'tag gh', title: `GitHub issue #${t.github_issue}` }, `#${t.github_issue}`));
+  const labels = (t.tags || []).length ? h('span', { class: 'labels' }, t.tags.map((x) => h('span', { class: 'label' }, x))) : null;
   const f = showFeature && features.find((x) => x.id === t.feature);
   return h('a', { class: `t is-${t.status}${open ? ' is-open' : ''}`, href: taskHref(slug, t.id), 'data-key': `t-${t.id}`, 'aria-current': open ? 'true' : null },
     h('span', { class: 'id' }, t.id), ' ', tags,
-    h('span', { class: 'title' }, t.title), notes,
+    h('span', { class: 'title' }, t.title), labels, notes,
     f ? h('span', { class: 'note' }, f.title) : null);
 }
 
@@ -142,7 +143,8 @@ function board(slug, features, tasks, st, rerender, openId) {
   const q = f.query.trim().toLowerCase();
   const visible = tasks.filter((t) => (!f.feature || t.feature === f.feature)
     && (!f.ready || t.ready)
-    && (!q || `${t.id} ${t.title}`.toLowerCase().includes(q)));
+    && (!f.tag || (t.tags || []).includes(f.tag))
+    && (!q || `${t.id} ${t.title} ${(t.tags || []).join(' ')}`.toLowerCase().includes(q)));
   const cancelled = visible.filter((t) => t.status === 'cancelled');
   const cols = [
     ['todo', visible.filter((t) => t.status === 'todo')],
@@ -154,7 +156,7 @@ function board(slug, features, tasks, st, rerender, openId) {
 
   const search = h('div', { class: 'search' },
     h('input', {
-      type: 'search', id: 'board-search', placeholder: 'Filter tasks', 'aria-label': 'Filter tasks by id or title',
+      type: 'search', id: 'board-search', placeholder: 'Filter tasks', 'aria-label': 'Filter tasks by id, title or tag',
       'data-key': 'board-search', value: f.query, autocomplete: 'off',
       oninput: (e) => {
         f.query = e.target.value;
@@ -168,15 +170,21 @@ function board(slug, features, tasks, st, rerender, openId) {
     'aria-label': 'Feature', 'data-key': 'feature-filter',
     onchange: (e) => { f.feature = e.target.value; rerender(); },
   }, h('option', { value: '' }, 'All features'), features.map((x) => h('option', { value: x.id, selected: x.id === f.feature ? true : null }, x.title))) : null;
+  const allTags = [...new Set(tasks.flatMap((t) => t.tags || []))].sort();
+  if (f.tag && !allTags.includes(f.tag)) allTags.push(f.tag);
+  const tagSel = allTags.length ? h('select', {
+    'aria-label': 'Tag', 'data-key': 'tag-filter',
+    onchange: (e) => { f.tag = e.target.value; rerender(); },
+  }, h('option', { value: '' }, 'All tags'), allTags.map((x) => h('option', { value: x, selected: x === f.tag ? true : null }, x))) : null;
   const readyPill = h('button', { type: 'button', class: 'pill', 'aria-pressed': f.ready ? 'true' : 'false', 'data-key': 'ready-only', title: 'Only tasks whose dependencies are all done',
     onclick: () => { f.ready = !f.ready; rerender(); } }, 'Ready to start');
   const cancelledBox = cancelled.length || f.showCancelled ? h('label', null,
     h('input', { type: 'checkbox', checked: f.showCancelled ? true : null, 'data-key': 'show-cancelled',
       onchange: (e) => { f.showCancelled = e.target.checked; rerender(); } }),
     `Cancelled (${cancelled.length})`) : null;
-  const filtered = f.feature || f.ready || q;
+  const filtered = f.feature || f.tag || f.ready || q;
   const clear = filtered ? h('button', { type: 'button', class: 'linkbtn', 'data-key': 'clear-filters',
-    onclick: () => { Object.assign(f, { feature: '', ready: false, query: '' }); rerender(); } }, 'Clear filters') : null;
+    onclick: () => { Object.assign(f, { feature: '', tag: '', ready: false, query: '' }); rerender(); } }, 'Clear filters') : null;
 
   const empty = { todo: 'Nothing waiting.', in_progress: 'Nothing in progress.', blocked: 'Nothing blocked.', done: 'Nothing done yet.', cancelled: 'None.' };
   const colEls = cols.map(([status, ts]) => {
@@ -193,7 +201,7 @@ function board(slug, features, tasks, st, rerender, openId) {
           shown.map((t) => h('li', null, taskCard(slug, t, { showFeature: !f.feature, features, open: t.id === openId }))), more)
         : h('p', { class: 'empty' }, filtered ? 'No matching tasks.' : empty[status]));
   });
-  return [h('div', { class: 'toolbar' }, search, featureSel, readyPill, cancelledBox, clear), h('div', { class: 'board' }, colEls)];
+  return [h('div', { class: 'toolbar' }, search, featureSel, tagSel, readyPill, cancelledBox, clear), h('div', { class: 'board' }, colEls)];
 }
 
 export function sagaList(events, st, rerender, { showProject = false, limit = 25 } = {}) {
@@ -329,10 +337,12 @@ function taskDrawer(d, st, act, allTasks = []) {
       h('div', { class: 'pair' },
         h('label', { class: 'field' }, 'Priority', h('select', { 'data-key': 'f-priority', onchange: (e) => { dr.priority = e.target.value; } },
           PRIORITY.map((name, i) => h('option', { value: String(i), selected: String(dr.priority) === String(i) ? true : null }, `${i} ${name}`)))),
-        line('weight', 'Weight (1 to 10)', { type: 'number', min: '1', max: '10' }))],
+        line('weight', 'Weight (1 to 10)', { type: 'number', min: '1', max: '10' })),
+      line('tags', 'Tags (comma separated)', { placeholder: 'backend, ui' })],
     'Save changes', () => act('edit', t, {
       title: dr.title || '', description: dr.description || '', acceptance_criteria: dr.criteria || '',
       priority: Number(dr.priority), weight: Number(dr.weight),
+      tags: (dr.tags || '').split(',').map((x) => x.trim()).filter(Boolean),
     }));
   } else if (st.form === 'dep') {
     formEl = form('Make this task wait for another', [
@@ -370,6 +380,7 @@ function taskDrawer(d, st, act, allTasks = []) {
             h('dt', null, 'Feature'), h('dd', null, d.feature.title),
             h('dt', null, 'Priority'), h('dd', null, PRIORITY[t.priority] || String(t.priority)),
             h('dt', null, 'Weight'), h('dd', null, String(t.weight)),
+            fact('Tags', (t.tags || []).length ? h('span', { class: 'labels' }, t.tags.map((x) => h('span', { class: 'label' }, x))) : ''),
             fact('Started by', t.assignee ? actorName(t.assignee) : ''), fact('Started', fmtDate(t.started_at)),
             fact('Completed', fmtDate(t.completed_at)), fact('Updated', fmtDate(t.updated_at)),
             h('dt', null, 'Version'), h('dd', null, String(t.version)),

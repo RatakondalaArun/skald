@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -48,6 +49,8 @@ type PlanTask struct {
 	DependsOnExisting []int64
 	// IdempotencyKey makes the task safe to re-submit; see CreatePlan.
 	IdempotencyKey string
+	// Tags are free-form labels; see domain.NormalizeTag.
+	Tags []string
 }
 
 // PlanResult says what CreatePlan created and what it reused.
@@ -203,7 +206,7 @@ func writePlan(ctx context.Context, tx *sql.Tx, m store.Meta, project domain.Pro
 			task, created, err := store.CreateTask(ctx, tx, m, store.TaskInput{
 				ProjectID: project.ID, FeatureID: feat.ID,
 				Title: pt.Title, Description: pt.Description, AcceptanceCriteria: pt.AcceptanceCriteria,
-				Priority: pt.Priority, Weight: pt.Weight, IdempotencyKey: pt.IdempotencyKey,
+				Priority: pt.Priority, Weight: pt.Weight, IdempotencyKey: pt.IdempotencyKey, Tags: pt.Tags,
 			})
 			if err != nil {
 				return err
@@ -320,6 +323,15 @@ func normalizePlan(in PlanInput) (PlanInput, error) {
 			if len(t.IdempotencyKey) > maxKeyLen {
 				return in, bad(tp+".idempotency_key", fmt.Sprintf("task %q: idempotency key is longer than %d characters", t.Ref, maxKeyLen), "Use a short stable key.")
 			}
+			tags, err := domain.NormalizeTags(t.Tags)
+			if err != nil {
+				var ve *domain.ValidationError
+				if errors.As(err, &ve) {
+					return in, bad(tp+".tags", fmt.Sprintf("task %q: %s", t.Ref, ve.Problem), ve.Hint)
+				}
+				return in, err
+			}
+			t.Tags = tags
 			if t.IdempotencyKey != "" {
 				if keys[t.IdempotencyKey] {
 					return in, bad(tp+".idempotency_key", fmt.Sprintf("idempotency key %q is used by more than one task", t.IdempotencyKey), "Keys must be unique within the plan, otherwise two tasks would collapse into one.")

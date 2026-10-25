@@ -15,17 +15,19 @@ func newTaskCmd(a *app) *cobra.Command {
 	return group("task", "Create tasks and move them through their lifecycle",
 		newTaskAddCmd(a), newTaskListCmd(a), newTaskShowCmd(a),
 		newTaskStartCmd(a), newTaskDoneCmd(a), newTaskBlockCmd(a), newTaskUnblockCmd(a),
-		newTaskCancelCmd(a), newTaskReopenCmd(a), newTaskNoteCmd(a), newTaskEditCmd(a), newTaskDepCmd(a))
+		newTaskCancelCmd(a), newTaskReopenCmd(a), newTaskNoteCmd(a), newTaskEditCmd(a), newTaskDepCmd(a), newTaskTagsCmd(a))
 }
 
 func newTaskAddCmd(a *app) *cobra.Command {
 	var feature, desc, criteria, priority, key string
+	var tags []string
 	var weight, position int
 	c := &cobra.Command{
-		Use:     "add <title>",
-		Short:   "Add a task to a feature",
-		Example: `  skald task add "Login form" --feature F-1 --priority 1 --criteria "Rejects bad passwords"`,
-		Args:    exactArgs(1),
+		Use:   "add <title>",
+		Short: "Add a task to a feature",
+		Example: `  skald task add "Login form" --feature F-1 --priority 1 --criteria "Rejects bad passwords"
+  skald task add "Fix board scroll" --feature F-2 --tag ui --tag bug`,
+		Args: exactArgs(1),
 		RunE: a.do(func(e *env, c *cobra.Command, args []string) error {
 			if feature == "" {
 				return usagef("--feature is required (list features with `skald feature list`)")
@@ -36,7 +38,7 @@ func newTaskAddCmd(a *app) *cobra.Command {
 			}
 			in := service.CreateTaskInput{
 				FeatureID: fid, Title: args[0], Description: desc, AcceptanceCriteria: criteria,
-				Weight: weight, Position: position, IdempotencyKey: key,
+				Weight: weight, Position: position, IdempotencyKey: key, Tags: tags,
 			}
 			if priority != "" {
 				p, err := parsePriority(priority)
@@ -65,22 +67,24 @@ func newTaskAddCmd(a *app) *cobra.Command {
 	c.Flags().IntVar(&weight, "weight", 1, "relative weight in feature progress (1-10)")
 	c.Flags().IntVar(&position, "position", 0, "position in the feature (0 = last)")
 	c.Flags().StringVar(&key, "key", "", "idempotency key: repeating the same key returns the existing task")
+	c.Flags().StringSliceVar(&tags, "tag", nil, "tag the task (repeatable or comma-separated)")
 	return c
 }
 
 func newTaskListCmd(a *app) *cobra.Command {
 	var feature string
-	var statuses []string
+	var statuses, tags []string
 	var ready bool
 	var limit, offset int
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List tasks, most urgent first",
 		Example: `  skald task list --status in_progress
-  skald task list --ready --feature F-2`,
+  skald task list --ready --feature F-2
+  skald task list --tag ui --tag bug`,
 		Args: noArgs,
 		RunE: a.do(func(e *env, c *cobra.Command, _ []string) error {
-			f := service.ListTasksFilter{ReadyOnly: ready, Limit: limit, Offset: offset}
+			f := service.ListTasksFilter{ReadyOnly: ready, Tags: tags, Limit: limit, Offset: offset}
 			if feature != "" {
 				id, err := featureArg(feature)
 				if err != nil {
@@ -113,6 +117,7 @@ func newTaskListCmd(a *app) *cobra.Command {
 	c.Flags().StringVar(&feature, "feature", "", "only tasks of this feature")
 	c.Flags().StringSliceVar(&statuses, "status", nil, "only these statuses (repeatable)")
 	c.Flags().BoolVar(&ready, "ready", false, "only tasks that can start now")
+	c.Flags().StringSliceVar(&tags, "tag", nil, "only tasks carrying every one of these tags (repeatable)")
 	c.Flags().IntVar(&limit, "limit", 0, "maximum tasks (0 = default 50, max 200)")
 	c.Flags().IntVar(&offset, "offset", 0, "skip this many tasks")
 	return c
@@ -126,7 +131,11 @@ func writeTaskTable(w io.Writer, tasks []domain.Task) {
 	t := table(w)
 	fmt.Fprintln(t, "ID\tSTATUS\tPRI\tFEATURE\tTITLE")
 	for _, k := range tasks {
-		fmt.Fprintf(t, "%s\t%s\tp%d\t%s\t%s\n", taskID(k.ID), k.Status, k.Priority, featureID(k.FeatureID), trunc(k.Title, 70))
+		title := trunc(k.Title, 70)
+		if len(k.Tags) > 0 {
+			title += "  #" + strings.Join(k.Tags, " #")
+		}
+		fmt.Fprintf(t, "%s\t%s\tp%d\t%s\t%s\n", taskID(k.ID), k.Status, k.Priority, featureID(k.FeatureID), title)
 	}
 	t.Flush()
 }
@@ -156,6 +165,9 @@ func writeTaskDetail(w io.Writer, d service.TaskDetail) {
 	fmt.Fprintf(w, "status      %s (version %d)\n", t.Status, t.Version)
 	fmt.Fprintf(w, "feature     %s %s\n", featureID(d.Feature.ID), d.Feature.Title)
 	fmt.Fprintf(w, "priority    p%d    weight %d\n", t.Priority, t.Weight)
+	if len(t.Tags) > 0 {
+		fmt.Fprintf(w, "tags        %s\n", strings.Join(t.Tags, ", "))
+	}
 	if t.Assignee != "" {
 		fmt.Fprintf(w, "assignee    %s\n", t.Assignee)
 	}
@@ -480,16 +492,18 @@ func newTaskDepCmd(a *app) *cobra.Command {
 
 func newTaskEditCmd(a *app) *cobra.Command {
 	var title, desc, criteria, priority string
+	var addTags, removeTags []string
 	var weight int
 	var version int64
 	c := &cobra.Command{
 		Use:   "edit <task>",
-		Short: "Change a task's title, description, criteria, priority or weight",
+		Short: "Change a task's title, description, criteria, priority, weight or tags",
 		Long: `Changes only the fields you pass. Pass an empty string to clear the
 description or criteria. Use skald task dep to change what a task waits for.`,
 		Example: `  skald task edit T-4 --title "Login form with rate limiting"
   skald task edit T-4 --priority 0 --description "Blocks the release"
-  skald task edit T-4 --criteria ""`,
+  skald task edit T-4 --criteria ""
+  skald task edit T-4 --tag security --untag ui`,
 		Args: exactArgs(1),
 		RunE: a.do(func(e *env, c *cobra.Command, args []string) error {
 			id, err := taskArg(args[0])
@@ -518,8 +532,10 @@ description or criteria. Use skald task dep to change what a task waits for.`,
 			if f.Changed("weight") {
 				in.Weight = &weight
 			}
-			if in.Title == nil && in.Description == nil && in.AcceptanceCriteria == nil && in.Priority == nil && in.Weight == nil {
-				return usagef("nothing to change: pass at least one of --title, --description, --criteria, --priority, --weight")
+			in.AddTags, in.RemoveTags = addTags, removeTags
+			if in.Title == nil && in.Description == nil && in.AcceptanceCriteria == nil && in.Priority == nil && in.Weight == nil &&
+				len(in.AddTags) == 0 && len(in.RemoveTags) == 0 {
+				return usagef("nothing to change: pass at least one of --title, --description, --criteria, --priority, --weight, --tag, --untag")
 			}
 			before, err := e.svc.GetTask(e.ctx, e.actor, e.ref, id)
 			if err != nil {
@@ -543,6 +559,45 @@ description or criteria. Use skald task dep to change what a task waits for.`,
 	c.Flags().StringVar(&criteria, "criteria", "", "new acceptance criteria (empty clears them)")
 	c.Flags().StringVar(&priority, "priority", "", "0 (urgent) to 3 (low)")
 	c.Flags().IntVar(&weight, "weight", 0, "relative weight in feature progress (1-10)")
+	c.Flags().StringSliceVar(&addTags, "tag", nil, "add a tag (repeatable or comma-separated)")
+	c.Flags().StringSliceVar(&removeTags, "untag", nil, "remove a tag (repeatable or comma-separated)")
 	c.Flags().Int64Var(&version, "version", 0, "fail if the task is not at this version (see skald task show)")
 	return c
+}
+
+func newTaskTagsCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:     "tags",
+		Short:   "List the tags used in the project, most used first",
+		Example: `  skald task tags`,
+		Args:    noArgs,
+		RunE: a.do(func(e *env, c *cobra.Command, _ []string) error {
+			tags, err := e.svc.ListTags(e.ctx, e.actor, e.ref)
+			if err != nil {
+				return err
+			}
+			type tagJSON struct {
+				Tag   string `json:"tag"`
+				Tasks int    `json:"tasks"`
+			}
+			out := struct {
+				Tags []tagJSON `json:"tags"`
+			}{Tags: []tagJSON{}}
+			for _, t := range tags {
+				out.Tags = append(out.Tags, tagJSON{t.Tag, t.Tasks})
+			}
+			return e.emit(out, func(w io.Writer) {
+				if len(tags) == 0 {
+					fmt.Fprintln(w, "no tags yet; add one with `skald task edit <task> --tag <tag>`")
+					return
+				}
+				t := table(w)
+				fmt.Fprintln(t, "TAG\tTASKS")
+				for _, k := range tags {
+					fmt.Fprintf(t, "%s\t%d\n", k.Tag, k.Tasks)
+				}
+				t.Flush()
+			})
+		}),
+	}
 }
