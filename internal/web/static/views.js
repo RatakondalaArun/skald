@@ -225,6 +225,24 @@ export function sagaList(events, st, rerender, { showProject = false, limit = 25
 
 const TABS = [['board', 'Board'], ['features', 'Features'], ['activity', 'Activity'], ['docs', 'Documents']];
 
+// githubAuthLine shows who a sync signs in as, the code of a sign-in waiting
+// for approval, or a sign-in button.
+function githubAuthLine(gh, st, act) {
+  if (!gh) return null;
+  const btn = (key, label, title) => h('button', { type: 'button', class: 'linkbtn', 'data-key': key, disabled: st.busy ? true : null, title, onclick: () => act(key) }, label);
+  if (gh.pending) {
+    return h('span', { class: 'gh-auth' }, 'Enter ', h('code', { class: 'gh-code' }, gh.pending.user_code), ' at ',
+      h('a', { href: gh.pending.verification_uri, target: '_blank', rel: 'noopener noreferrer' }, gh.pending.verification_uri.replace(/^https?:\/\//, '')),
+      ' to sign in. ', btn('github-logout', 'Cancel', 'Stop this sign-in'));
+  }
+  if (gh.signed_in) {
+    const who = gh.login ? `Signed in as ${gh.login}` : `Using the token from ${gh.source}`;
+    return h('span', { class: 'gh-auth' }, `${who}. `, gh.source === 'skald github login' ? btn('github-logout', 'Sign out', 'Forget the saved GitHub token') : null);
+  }
+  if (!gh.configured) return h('span', { class: 'gh-auth' }, 'No GitHub token: run skald github login or set GITHUB_TOKEN.');
+  return h('span', { class: 'gh-auth' }, btn('github-login', 'Sign in to GitHub', 'Sign in with a one-time code on github.com'));
+}
+
 export function projectView(d, st, rerender, route, act) {
   const { summary, board: b, feed } = d;
   const p = summary.project;
@@ -257,7 +275,8 @@ export function projectView(d, st, rerender, route, act) {
       h('div', { class: 'proj-title' },
         h('div', null, h('h1', null, p.name), h('p', { class: 'sub' }, p.description ? `${p.description}. ` : '', parts.join(', '), '.'),
           p.github ? h('p', { class: 'sub' }, 'Linked to ', h('a', { href: `https://github.com/${p.github}`, target: '_blank', rel: 'noopener noreferrer' }, p.github), ' ',
-            h('button', { type: 'button', class: 'btn', 'data-key': 'github-sync', disabled: st.busy ? true : null, title: 'Pull milestones, issues, pull requests and discussions', onclick: () => act('github-sync') }, 'Sync from GitHub')) : null),
+            h('button', { type: 'button', class: 'btn', 'data-key': 'github-sync', disabled: st.busy ? true : null, title: 'Pull milestones, issues, pull requests and discussions', onclick: () => act('github-sync') }, 'Sync from GitHub'),
+            githubAuthLine(st.gh, st, act)) : null),
         h('div', { class: 'figure', title: 'Weighted by feature and task weights, so it can differ from the plain task count.' },
           h('span', { class: 'n' }, String(pct(summary.progress.fraction))), h('span', { class: 'u' }, '%'))),
       taskStrip(p.slug, summary.features, b.tasks), legend(c),

@@ -2,9 +2,13 @@ package web
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,5 +98,77 @@ func TestGitHubSyncEndpoint(t *testing.T) {
 	e.srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("no token: %d", rec.Code)
+	}
+}
+
+func TestGitHubSignIn(t *testing.T) {
+	approved := make(chan struct{})
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login/device/code":
+			_, _ = io.WriteString(w, `{"device_code":"dc","user_code":"WXYZ-0001","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}`)
+		case "/login/oauth/access_token":
+			select {
+			case <-approved:
+				_, _ = io.WriteString(w, `{"access_token":"gho_web","scope":"repo"}`)
+			default:
+				_, _ = io.WriteString(w, `{"error":"authorization_pending"}`)
+			}
+		case "/user":
+			_, _ = io.WriteString(w, `{"login":"octocat"}`)
+		}
+	}))
+	defer gh.Close()
+	home := t.TempDir()
+	t.Setenv("SKALD_HOME", home)
+	t.Setenv("PATH", t.TempDir()) // no gh CLI
+	t.Setenv(github.EnvToken, "")
+	t.Setenv(github.EnvGHToken, "")
+	t.Setenv(github.EnvAPIURL, gh.URL)
+	t.Setenv(github.EnvClientID, "")
+	e := wtNew(t)
+
+	_, st := e.get("/api/github/auth")
+	if st["configured"] != false || st["signed_in"] != false {
+		t.Fatalf("unconfigured: %v", st)
+	}
+	if code, body := e.post("/api/github/login", `{}`); code != http.StatusBadRequest || wtErrKind(body) != "github" {
+		t.Fatalf("login without client id: %d %v", code, body)
+	}
+
+	t.Setenv(github.EnvClientID, "cid")
+	code, st := e.post("/api/github/login", `{}`)
+	pending, _ := st["pending"].(map[string]any)
+	if code != http.StatusOK || pending["user_code"] != "WXYZ-0001" || st["signed_in"] != false {
+		t.Fatalf("login: %d %v", code, st)
+	}
+	close(approved)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, st = e.get("/api/github/auth")
+		if st["pending"] == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sign-in never finished: %v", st)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if st["signed_in"] != true || st["login"] != "octocat" || st["source"] != github.SourceLogin || st["error"] != nil {
+		t.Fatalf("signed in: %v", st)
+	}
+	if b, err := os.ReadFile(filepath.Join(home, "github.json")); err != nil || !strings.Contains(string(b), "gho_web") {
+		t.Fatalf("saved token: %s %v", b, err)
+	}
+	// The token itself never reaches the page.
+	if raw, _ := json.Marshal(st); strings.Contains(string(raw), "gho_web") {
+		t.Fatalf("token leaked: %s", raw)
+	}
+
+	if code, st = e.post("/api/github/logout", `{}`); code != http.StatusOK || st["signed_in"] != false {
+		t.Fatalf("logout: %d %v", code, st)
+	}
+	if _, err := os.Stat(filepath.Join(home, "github.json")); !os.IsNotExist(err) {
+		t.Fatalf("token file after logout: %v", err)
 	}
 }

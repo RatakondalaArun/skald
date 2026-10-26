@@ -150,3 +150,50 @@ func TestCLIGitHubSync(t *testing.T) {
 		t.Fatalf("bad token: %d %s", r.code, r.stderr)
 	}
 }
+
+func TestCLIGitHubLogin(t *testing.T) {
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login/device/code":
+			_, _ = io.WriteString(w, `{"device_code":"dc","user_code":"WXYZ-0001","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}`)
+		case "/login/oauth/access_token":
+			_, _ = io.WriteString(w, `{"access_token":"gho_cli","scope":"repo"}`)
+		case "/user":
+			if r.Header.Get("Authorization") != "Bearer gho_cli" {
+				http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(w, `{"login":"octocat"}`)
+		}
+	}))
+	defer gh.Close()
+	s := newSandbox(t)
+	// An empty PATH entry keeps a real gh CLI out of the token lookup.
+	base := []string{"GITHUB_TOKEN=", "GH_TOKEN=", "PATH=" + t.TempDir(), "SKALD_GITHUB_API_URL=" + gh.URL}
+
+	r := s.runIn(s.repo, base, "github", "login")
+	if r.code != 1 || !strings.Contains(r.stderr, "SKALD_GITHUB_CLIENT_ID") {
+		t.Fatalf("login without client id: %d %s", r.code, r.stderr)
+	}
+	r = s.runIn(s.repo, base, "github", "status")
+	if r.code != 1 || !strings.Contains(r.stdout, "skald github login") {
+		t.Fatalf("status before login: %d %s %s", r.code, r.stdout, r.stderr)
+	}
+
+	r = s.runIn(s.repo, append(base, "SKALD_GITHUB_CLIENT_ID=cid"), "github", "login")
+	if r.code != 0 || !strings.Contains(r.stderr, "WXYZ-0001") || !strings.Contains(r.stdout, "signed in to GitHub as octocat") {
+		t.Fatalf("login: %d\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	r = s.runIn(s.repo, base, "github", "status")
+	if r.code != 0 || !strings.Contains(r.stdout, "octocat (token from skald github login)") {
+		t.Fatalf("status: %d %s %s", r.code, r.stdout, r.stderr)
+	}
+	r = s.runIn(s.repo, base, "github", "logout")
+	if r.code != 0 || !strings.Contains(r.stdout, "signed out") {
+		t.Fatalf("logout: %d %s %s", r.code, r.stdout, r.stderr)
+	}
+	r = s.runIn(s.repo, base, "github", "status")
+	if r.code != 1 {
+		t.Fatalf("status after logout: %d %s", r.code, r.stdout)
+	}
+}

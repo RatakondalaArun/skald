@@ -114,6 +114,8 @@ select, .btn, .search input {
 .tag { font-size: 11.5px; color: var(--ink-2); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 5px; margin-right: 4px; white-space: nowrap; }
 .tag.urgent { border-color: var(--blocked); color: var(--ink); font-weight: 600; }
 .tag.ready { border-color: var(--done); }
+.gh-auth { margin-left: 10px; }
+.gh-code { font-family: var(--mono); font-weight: 600; letter-spacing: 0.04em; padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 3px; user-select: all; }
 .tag.gh { font-family: var(--mono); }
 .labels { display: flex; flex-wrap: wrap; gap: 4px; }
 .t .labels { margin-top: 4px; }

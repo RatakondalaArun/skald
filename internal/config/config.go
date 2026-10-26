@@ -33,6 +33,9 @@ func ServeStatePath() (string, error) { return inHome("serve.json") }
 // ServeLogPath is where a background `skald serve` writes its output.
 func ServeLogPath() (string, error) { return inHome("serve.log") }
 
+// GitHubTokenPath is where `skald github login` saves its token.
+func GitHubTokenPath() (string, error) { return inHome("github.json") }
+
 func inHome(name string) (string, error) {
 	h, err := Home()
 	if err != nil {

@@ -38,8 +38,8 @@ the new issues of tasks already done are closed with their evidence.
 
 The repository is --repo, else the project's link (skald github link), else the
 origin remote of the project's directory. The token comes from GITHUB_TOKEN,
-GH_TOKEN or the GitHub CLI (gh auth login). For GitHub Enterprise set
-SKALD_GITHUB_API_URL=https://<host>/api/v3.`
+GH_TOKEN, skald github login, or the GitHub CLI (gh auth login). For GitHub
+Enterprise set SKALD_GITHUB_API_URL=https://<host>/api/v3.`
 
 func newGitHubCmd(a *app) *cobra.Command {
 	var unlink bool
@@ -99,7 +99,8 @@ tasks stay as they are.`,
 	sync.Flags().BoolVar(&o.CreateIssues, "create-issues", false, "create GitHub issues and milestones for tasks and features that have none")
 	sync.Flags().BoolVar(&o.DryRun, "dry-run", false, "show what would change without writing anything")
 
-	return group("github", "Sync with GitHub issues, milestones, pull requests and discussions", link, sync)
+	return group("github", "Sync with GitHub issues, milestones, pull requests and discussions",
+		newGitHubLoginCmd(a), newGitHubLogoutCmd(a), newGitHubAuthStatusCmd(a), link, sync)
 }
 
 type githubNoteJSON struct {
