@@ -59,6 +59,14 @@ skald log --follow                      # event stream
 skald serve                             # dashboard at http://127.0.0.1:7331
 ```
 
+To keep the dashboard running without a terminal, start it in the background. It returns once the dashboard is listening, logs to `~/.skald/serve.log` and records its pid and URL in `~/.skald/serve.json`. Background mode works on Linux and macOS.
+
+```sh
+skald serve --background --open         # or -d
+skald serve status                      # URL, pid, log; exits 1 if none is running
+skald serve stop                        # clean shutdown, killed after 5 seconds
+```
+
 ### Plan files
 
 `skald plan import` creates features, tasks and dependencies in one transaction. Nothing is written if any part is invalid. `docs/plan-example.json` is a complete example:
@@ -191,7 +199,8 @@ Global flags: `--json` (JSON output on read commands), `-p, --project <slug>`. S
 | `next` | Tasks that can start now |
 | `status [--watch]` | Progress, blockers, ready and stale tasks |
 | `log [--follow] [--limit] [--since] [--all-projects]` | Event history |
-| `serve [--addr] [--open] [--insecure-listen]` | Web dashboard |
+| `serve [--addr] [--open] [--insecure-listen] [--background]` | Web dashboard (`--background`/`-d` detaches it) |
+| `serve status`, `serve stop` | Check on or stop the background dashboard |
 | `mcp` | MCP server on stdio |
 | `backup [--out]` | Consistent database copy |
 | `export [--all] [--out]`, `import <file>` | JSON export and import |
@@ -230,6 +239,7 @@ internal/cli         commands
 internal/mcpserver   MCP tools over stdio
 internal/web         HTTP API, SSE, embedded dashboard
 internal/github      GitHub API client used by the sync
+internal/daemon      background process start, status and stop
 ```
 
 ## Development

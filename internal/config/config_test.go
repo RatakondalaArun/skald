@@ -26,3 +26,13 @@ func TestHomeDefault(t *testing.T) {
 		t.Fatalf("Home() = %q, %v", h, err)
 	}
 }
+
+func TestServePaths(t *testing.T) {
+	t.Setenv("SKALD_HOME", "/tmp/custom-skald")
+	if p, _ := ServeStatePath(); p != "/tmp/custom-skald/serve.json" {
+		t.Fatalf("ServeStatePath() = %q", p)
+	}
+	if p, _ := ServeLogPath(); p != "/tmp/custom-skald/serve.log" {
+		t.Fatalf("ServeLogPath() = %q", p)
+	}
+}

@@ -26,3 +26,17 @@ func DBPath() (string, error) {
 	}
 	return filepath.Join(h, "skald.db"), nil
 }
+
+// ServeStatePath is where a background `skald serve` records its pid and URL.
+func ServeStatePath() (string, error) { return inHome("serve.json") }
+
+// ServeLogPath is where a background `skald serve` writes its output.
+func ServeLogPath() (string, error) { return inHome("serve.log") }
+
+func inHome(name string) (string, error) {
+	h, err := Home()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(h, name), nil
+}
