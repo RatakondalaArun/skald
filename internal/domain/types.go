@@ -249,6 +249,7 @@ type Task struct {
 	Assignee           string
 	BlockedReason      string
 	IdempotencyKey     string
+	Tags               []string // normalized, sorted, never nil when read from the store
 	Version            int64
 	StartedAt          *time.Time
 	CompletedAt        *time.Time

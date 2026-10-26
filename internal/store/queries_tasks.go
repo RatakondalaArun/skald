@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -11,7 +13,7 @@ import (
 )
 
 const taskCols = `id, project_id, feature_id, title, description, acceptance_criteria, status, priority, weight, position,
-  assignee, blocked_reason, idempotency_key, version, started_at, completed_at, created_at, updated_at`
+  assignee, blocked_reason, idempotency_key, version, started_at, completed_at, created_at, updated_at, tags`
 
 func scanTask(sc scanner) (domain.Task, error) {
 	var (
@@ -19,14 +21,20 @@ func scanTask(sc scanner) (domain.Task, error) {
 		desc, accept, assignee, blocked, idem sql.NullString
 		status                                string
 		started, completed                    sql.NullString
-		created, updated                      string
+		created, updated, tags                string
 	)
 	if err := sc.Scan(&t.ID, &t.ProjectID, &t.FeatureID, &t.Title, &desc, &accept, &status, &t.Priority, &t.Weight, &t.Position,
-		&assignee, &blocked, &idem, &t.Version, &started, &completed, &created, &updated); err != nil {
+		&assignee, &blocked, &idem, &t.Version, &started, &completed, &created, &updated, &tags); err != nil {
 		return domain.Task{}, err
 	}
 	t.Description, t.AcceptanceCriteria, t.Status = desc.String, accept.String, domain.TaskStatus(status)
 	t.Assignee, t.BlockedReason, t.IdempotencyKey = assignee.String, blocked.String, idem.String
+	if err := json.Unmarshal([]byte(tags), &t.Tags); err != nil {
+		return domain.Task{}, fmt.Errorf("parse stored tags %q: %w", tags, err)
+	}
+	if t.Tags == nil {
+		t.Tags = []string{}
+	}
 	var err error
 	if t.StartedAt, err = parseNullTime(started); err != nil {
 		return domain.Task{}, err
@@ -55,7 +63,8 @@ type TaskInput struct {
 	Priority           *int
 	Weight             int
 	Position           int
-	IdempotencyKey     string // optional; repeating a key in a project returns the existing task
+	IdempotencyKey     string   // optional; repeating a key in a project returns the existing task
+	Tags               []string // normalized by domain.NormalizeTags
 }
 
 // CreateTask inserts a task in status todo and appends task.created. When
@@ -90,6 +99,10 @@ func CreateTask(ctx context.Context, tx *sql.Tx, m Meta, in TaskInput) (task dom
 	if err := validateRange("weight", in.Weight, 1, 10); err != nil {
 		return domain.Task{}, false, err
 	}
+	tags, err := encodeTags(in.Tags)
+	if err != nil {
+		return domain.Task{}, false, err
+	}
 	if _, err := GetProject(ctx, tx, in.ProjectID); err != nil {
 		return domain.Task{}, false, err
 	}
@@ -107,10 +120,10 @@ func CreateTask(ctx context.Context, tx *sql.Tx, m Meta, in TaskInput) (task dom
 	}
 	now := formatTime(m.now())
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO tasks (project_id, feature_id, title, description, acceptance_criteria, status, priority, weight, position, idempotency_key, version, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?, 1, ?, ?)`,
+		`INSERT INTO tasks (project_id, feature_id, title, description, acceptance_criteria, status, priority, weight, position, idempotency_key, tags, version, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?, ?, 1, ?, ?)`,
 		in.ProjectID, in.FeatureID, in.Title, nullStr(in.Description), nullStr(in.AcceptanceCriteria),
-		priority, in.Weight, in.Position, nullStr(in.IdempotencyKey), now, now)
+		priority, in.Weight, in.Position, nullStr(in.IdempotencyKey), tags, now, now)
 	if err != nil {
 		return domain.Task{}, false, mapErr(err)
 	}
@@ -118,8 +131,11 @@ func CreateTask(ctx context.Context, tx *sql.Tx, m Meta, in TaskInput) (task dom
 	if err != nil {
 		return domain.Task{}, false, err
 	}
-	if _, err := appendEvent(ctx, tx, m, in.ProjectID, domain.EntityTask, id, domain.EventTaskCreated,
-		map[string]any{"title": in.Title, "feature_id": in.FeatureID}); err != nil {
+	payload := map[string]any{"title": in.Title, "feature_id": in.FeatureID}
+	if len(in.Tags) > 0 {
+		payload["tags"] = in.Tags
+	}
+	if _, err := appendEvent(ctx, tx, m, in.ProjectID, domain.EntityTask, id, domain.EventTaskCreated, payload); err != nil {
 		return domain.Task{}, false, err
 	}
 	t, err := GetTask(ctx, tx, id)
@@ -154,7 +170,8 @@ type TaskFilter struct {
 	ProjectID int64
 	FeatureID int64 // 0 = any
 	Statuses  []domain.TaskStatus
-	ReadyOnly bool // todo tasks whose dependencies are all done or cancelled
+	ReadyOnly bool     // todo tasks whose dependencies are all done or cancelled
+	Tags      []string // tasks carrying every one of these normalized tags
 	Limit     int
 	Offset    int
 }
@@ -185,6 +202,10 @@ func ListTasks(ctx context.Context, q Querier, f TaskFilter) ([]domain.Task, err
 		where = append(where, `t.status = 'todo' AND NOT EXISTS (
 			SELECT 1 FROM task_dependencies d JOIN tasks p ON p.id = d.depends_on_id
 			WHERE d.task_id = t.id AND p.status NOT IN ('done', 'cancelled'))`)
+	}
+	for _, tag := range f.Tags {
+		where = append(where, "EXISTS (SELECT 1 FROM json_each(t.tags) WHERE json_each.value = ?)")
+		args = append(args, tag)
 	}
 	query := `SELECT ` + prefixCols("t.", taskCols) + ` FROM tasks t JOIN features f ON f.id = t.feature_id WHERE ` +
 		strings.Join(where, " AND ") + ` ORDER BY t.priority, f.position, t.position, t.id`
@@ -308,7 +329,8 @@ type TaskPatch struct {
 	Priority           *int
 	Weight             *int
 	Position           *int
-	FeatureID          *int64 // must be a feature of the same project
+	FeatureID          *int64    // must be a feature of the same project
+	Tags               *[]string // replaces the set; normalized by domain.NormalizeTags
 }
 
 // UpdateTaskFields applies a patch, bumps the version and appends
@@ -370,6 +392,15 @@ func UpdateTaskFields(ctx context.Context, tx *sql.Tx, m Meta, id, expectedVersi
 		}
 		set("feature_id", feat.ID)
 	}
+	var newTags json.RawMessage
+	if p.Tags != nil {
+		tags, err := encodeTags(*p.Tags)
+		if err != nil {
+			return domain.Task{}, err
+		}
+		set("tags", tags)
+		newTags = json.RawMessage(tags)
+	}
 	if len(sets) == 0 {
 		return cur, nil
 	}
@@ -378,8 +409,11 @@ func UpdateTaskFields(ctx context.Context, tx *sql.Tx, m Meta, id, expectedVersi
 	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...); err != nil {
 		return domain.Task{}, mapErr(err)
 	}
-	if _, err := appendEvent(ctx, tx, m, cur.ProjectID, domain.EntityTask, id, domain.EventTaskUpdated,
-		map[string]any{"fields": changed, "version": cur.Version + 1}); err != nil {
+	payload := map[string]any{"fields": changed, "version": cur.Version + 1}
+	if newTags != nil {
+		payload["tags"] = newTags
+	}
+	if _, err := appendEvent(ctx, tx, m, cur.ProjectID, domain.EntityTask, id, domain.EventTaskUpdated, payload); err != nil {
 		return domain.Task{}, err
 	}
 	return GetTask(ctx, tx, id)
@@ -409,4 +443,34 @@ func AddTaskNote(ctx context.Context, tx *sql.Tx, m Meta, taskID int64, text str
 func touchTask(ctx context.Context, tx *sql.Tx, m Meta, taskID int64) error {
 	_, err := tx.ExecContext(ctx, `UPDATE tasks SET updated_at = ? WHERE id = ?`, formatTime(m.now()), taskID)
 	return mapErr(err)
+}
+
+// encodeTags normalizes tags and returns the JSON stored in tasks.tags.
+func encodeTags(tags []string) (string, error) {
+	norm, err := domain.NormalizeTags(tags)
+	if err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(norm)
+	return string(b), err
+}
+
+// ProjectTagCounts returns how many tasks of the project carry each tag.
+func ProjectTagCounts(ctx context.Context, q Querier, projectID int64) (map[string]int, error) {
+	rows, err := q.QueryContext(ctx, `SELECT j.value, COUNT(*) FROM tasks t, json_each(t.tags) j
+		WHERE t.project_id = ? GROUP BY j.value`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var tag string
+		var n int
+		if err := rows.Scan(&tag, &n); err != nil {
+			return nil, err
+		}
+		out[tag] = n
+	}
+	return out, rows.Err()
 }

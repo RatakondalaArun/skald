@@ -81,6 +81,7 @@ tasks(
   assignee TEXT,                                             -- actor that started it
   blocked_reason TEXT,
   idempotency_key TEXT,                                      -- UNIQUE(project_id, idempotency_key)
+  tags TEXT NOT NULL DEFAULT '[]',                           -- JSON array, normalized and sorted (migration 0002)
   version INTEGER NOT NULL DEFAULT 1,                        -- optimistic concurrency
   started_at TEXT, completed_at TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
@@ -196,12 +197,13 @@ Responses are compact: short text or terse JSON, with no decorative output. List
 | `get_project_progress` | Derived progress per feature and overall |
 | `create_plan` | **Bulk**: features, tasks and dependencies in one transaction. Dependencies refer to tasks by local `ref` names inside the payload. Idempotent through `idempotency_key` per task |
 | `create_feature` / `list_features` | Single-item management |
-| `create_task` / `get_task` / `list_tasks` | Single-item management. `list_tasks` filters by feature, status, `ready` |
+| `create_task` / `get_task` / `list_tasks` | Single-item management. `list_tasks` filters by feature, status, tags, `ready` |
 | `get_next_tasks` | Ready tasks ordered by priority, then position. The "what should I do now" call |
 | `start_task` | todo → in_progress. Fails with the unmet dependency list if not ready |
 | `update_task_status` | Other transitions (block, unblock, cancel, reopen, complete) |
 | `add_task_note` | Free-text progress note, stored as an event |
 | `add_task_dependency` | With cycle check |
+| `tag_task` / `list_tags` | Add or remove task tags; tags in use with task counts |
 | `record_verification` | Attach an artifact: commit, pr, test_report, link, manual |
 | `report_task_result` | Convenience: summary note + artifacts + complete in one call |
 | `get_document` / `put_document` | Requirements, architecture, conventions. Versioned |

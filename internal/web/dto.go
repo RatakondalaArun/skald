@@ -95,26 +95,27 @@ func (d *featureDTO) linkGitHub(l service.GitHubLinks, featureID int64) {
 }
 
 type taskDTO struct {
-	ID                 string `json:"id"`
-	N                  int64  `json:"n"`
-	Feature            string `json:"feature"`
-	Title              string `json:"title"`
-	Description        string `json:"description,omitempty"`
-	AcceptanceCriteria string `json:"acceptance_criteria,omitempty"`
-	Status             string `json:"status"`
-	Priority           int    `json:"priority"`
-	Weight             int    `json:"weight"`
-	Assignee           string `json:"assignee,omitempty"`
-	BlockedReason      string `json:"blocked_reason,omitempty"`
-	Version            int64  `json:"version"`
-	Ready              bool   `json:"ready,omitempty"`
-	Stale              bool   `json:"stale,omitempty"`
-	StartedAt          string `json:"started_at,omitempty"`
-	CompletedAt        string `json:"completed_at,omitempty"`
-	UpdatedAt          string `json:"updated_at"`
-	CreatedAt          string `json:"created_at"`
-	GitHub             string `json:"github,omitempty"`       // issue URL
-	GitHubIssue        int    `json:"github_issue,omitempty"` // issue number
+	ID                 string   `json:"id"`
+	N                  int64    `json:"n"`
+	Feature            string   `json:"feature"`
+	Title              string   `json:"title"`
+	Description        string   `json:"description,omitempty"`
+	AcceptanceCriteria string   `json:"acceptance_criteria,omitempty"`
+	Status             string   `json:"status"`
+	Priority           int      `json:"priority"`
+	Weight             int      `json:"weight"`
+	Assignee           string   `json:"assignee,omitempty"`
+	BlockedReason      string   `json:"blocked_reason,omitempty"`
+	Tags               []string `json:"tags"`
+	Version            int64    `json:"version"`
+	Ready              bool     `json:"ready,omitempty"`
+	Stale              bool     `json:"stale,omitempty"`
+	StartedAt          string   `json:"started_at,omitempty"`
+	CompletedAt        string   `json:"completed_at,omitempty"`
+	UpdatedAt          string   `json:"updated_at"`
+	CreatedAt          string   `json:"created_at"`
+	GitHub             string   `json:"github,omitempty"`       // issue URL
+	GitHubIssue        int      `json:"github_issue,omitempty"` // issue number
 }
 
 // taskOf builds a task's DTO. Without the project's links only tasks synced
@@ -127,7 +128,7 @@ func taskIn(l service.GitHubLinks, t domain.Task) taskDTO {
 		Feature: domain.FormatID(domain.EntityFeature, t.FeatureID),
 		Title:   t.Title, Description: t.Description, AcceptanceCriteria: t.AcceptanceCriteria,
 		Status: string(t.Status), Priority: t.Priority, Weight: t.Weight, Assignee: t.Assignee,
-		BlockedReason: t.BlockedReason, Version: t.Version,
+		BlockedReason: t.BlockedReason, Tags: t.Tags, Version: t.Version,
 		StartedAt: tsp(t.StartedAt), CompletedAt: tsp(t.CompletedAt),
 		UpdatedAt: ts(t.UpdatedAt), CreatedAt: ts(t.CreatedAt),
 	}

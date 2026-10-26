@@ -136,11 +136,15 @@ func ImportExportRows(ctx context.Context, tx *sql.Tx, r ExportRows) error {
 		}
 	}
 	for _, t := range r.Tasks {
+		tags, err := encodeTags(t.Tags)
+		if err != nil {
+			return fmt.Errorf("import task %d: %w", t.ID, err)
+		}
 		if err := exec(fmt.Sprintf("task %d", t.ID), `INSERT INTO tasks (id, project_id, feature_id, title, description, acceptance_criteria, status, priority, weight, position,
-			assignee, blocked_reason, idempotency_key, version, started_at, completed_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			assignee, blocked_reason, idempotency_key, version, started_at, completed_at, created_at, updated_at, tags) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			t.ID, t.ProjectID, t.FeatureID, t.Title, nullStr(t.Description), nullStr(t.AcceptanceCriteria), string(t.Status), t.Priority, t.Weight, t.Position,
 			nullStr(t.Assignee), nullStr(t.BlockedReason), nullStr(t.IdempotencyKey), t.Version, nullTime(t.StartedAt), nullTime(t.CompletedAt),
-			formatTime(t.CreatedAt), formatTime(t.UpdatedAt)); err != nil {
+			formatTime(t.CreatedAt), formatTime(t.UpdatedAt), tags); err != nil {
 			return err
 		}
 	}

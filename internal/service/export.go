@@ -89,6 +89,7 @@ type ExportTask struct {
 	Assignee           string            `json:"assignee"`
 	BlockedReason      string            `json:"blocked_reason"`
 	IdempotencyKey     string            `json:"idempotency_key"`
+	Tags               []string          `json:"tags"` // absent in exports from before tags; read as none
 	Version            int64             `json:"version"`
 	StartedAt          *time.Time        `json:"started_at"`
 	CompletedAt        *time.Time        `json:"completed_at"`
@@ -188,7 +189,7 @@ func buildExport(r store.ExportRows, scope, skaldVersion string, schema int, now
 	}
 	for _, t := range r.Tasks {
 		x.Tasks = append(x.Tasks, ExportTask{t.ID, short(domain.EntityTask, t.ID), t.ProjectID, t.FeatureID, t.Title, t.Description, t.AcceptanceCriteria,
-			t.Status, t.Priority, t.Weight, t.Position, t.Assignee, t.BlockedReason, t.IdempotencyKey, t.Version, t.StartedAt, t.CompletedAt, t.CreatedAt, t.UpdatedAt})
+			t.Status, t.Priority, t.Weight, t.Position, t.Assignee, t.BlockedReason, t.IdempotencyKey, t.Tags, t.Version, t.StartedAt, t.CompletedAt, t.CreatedAt, t.UpdatedAt})
 	}
 	for _, d := range r.Dependencies {
 		x.Dependencies = append(x.Dependencies, ExportDependency{d.TaskID, d.DependsOnID, short(domain.EntityTask, d.TaskID), short(domain.EntityTask, d.DependsOnID)})
@@ -267,7 +268,7 @@ func (x *Export) rows() (store.ExportRows, error) {
 	for _, t := range x.Tasks {
 		r.Tasks = append(r.Tasks, domain.Task{ID: t.ID, ProjectID: t.ProjectID, FeatureID: t.FeatureID, Title: t.Title, Description: t.Description, AcceptanceCriteria: t.AcceptanceCriteria,
 			Status: t.Status, Priority: t.Priority, Weight: t.Weight, Position: t.Position, Assignee: t.Assignee, BlockedReason: t.BlockedReason, IdempotencyKey: t.IdempotencyKey,
-			Version: t.Version, StartedAt: t.StartedAt, CompletedAt: t.CompletedAt, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt})
+			Tags: t.Tags, Version: t.Version, StartedAt: t.StartedAt, CompletedAt: t.CompletedAt, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt})
 	}
 	for _, d := range x.Dependencies {
 		r.Dependencies = append(r.Dependencies, domain.Dependency{TaskID: d.TaskID, DependsOnID: d.DependsOnID})

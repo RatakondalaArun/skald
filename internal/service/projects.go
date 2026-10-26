@@ -306,6 +306,8 @@ type CreateTaskInput struct {
 	// IdempotencyKey makes retries safe: repeating a key in a project returns
 	// the existing task with created == false.
 	IdempotencyKey string
+	// Tags are free-form labels; see domain.NormalizeTag for the rules.
+	Tags []string
 }
 
 // CreateTask adds a task to a feature of the resolved project. The feature
@@ -318,6 +320,10 @@ func (s *Service) CreateTask(ctx context.Context, actor domain.Actor, ref Projec
 		return domain.Task{}, false, err
 	}
 	if err := ensureProjectActive(p); err != nil {
+		return domain.Task{}, false, err
+	}
+	tags, err := domain.NormalizeTags(in.Tags)
+	if err != nil {
 		return domain.Task{}, false, err
 	}
 	err = s.db.WriteTx(ctx, func(tx *sql.Tx) error {
@@ -346,6 +352,7 @@ func (s *Service) CreateTask(ctx context.Context, actor domain.Actor, ref Projec
 			Weight:             in.Weight,
 			Position:           in.Position,
 			IdempotencyKey:     in.IdempotencyKey,
+			Tags:               tags,
 		})
 		return err
 	})
@@ -420,8 +427,9 @@ func (s *Service) GetTask(ctx context.Context, actor domain.Actor, ref ProjectRe
 type ListTasksFilter struct {
 	FeatureID int64
 	Statuses  []domain.TaskStatus
-	ReadyOnly bool // todo tasks whose dependencies are all done or cancelled
-	Limit     int  // 0 means DefaultListLimit; capped at MaxListLimit
+	ReadyOnly bool     // todo tasks whose dependencies are all done or cancelled
+	Tags      []string // tasks carrying every one of these tags
+	Limit     int      // 0 means DefaultListLimit; capped at MaxListLimit
 	Offset    int
 }
 
@@ -446,6 +454,10 @@ func (s *Service) ListTasks(ctx context.Context, actor domain.Actor, ref Project
 	if limit > MaxListLimit {
 		limit = MaxListLimit
 	}
+	tags, err := domain.NormalizeTags(f.Tags)
+	if err != nil {
+		return TaskList{}, err
+	}
 	p, err := s.ResolveProject(ctx, ref)
 	if err != nil {
 		return TaskList{}, err
@@ -467,6 +479,7 @@ func (s *Service) ListTasks(ctx context.Context, actor domain.Actor, ref Project
 			FeatureID: f.FeatureID,
 			Statuses:  f.Statuses,
 			ReadyOnly: f.ReadyOnly,
+			Tags:      tags,
 			Limit:     limit + 1,
 			Offset:    f.Offset,
 		})

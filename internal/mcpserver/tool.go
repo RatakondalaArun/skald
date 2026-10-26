@@ -135,20 +135,22 @@ func statusCounts(c service.StatusCounts) obj {
 }
 
 type taskLine struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Status   string `json:"status"`
-	Feature  string `json:"feature,omitempty"`
-	Priority string `json:"priority,omitempty"`
-	Assignee string `json:"assignee,omitempty"`
-	Version  int64  `json:"version,omitempty"`
-	Reason   string `json:"blocked_reason,omitempty"`
+	ID       string   `json:"id"`
+	Title    string   `json:"title"`
+	Status   string   `json:"status"`
+	Feature  string   `json:"feature,omitempty"`
+	Priority string   `json:"priority,omitempty"`
+	Assignee string   `json:"assignee,omitempty"`
+	Version  int64    `json:"version,omitempty"`
+	Reason   string   `json:"blocked_reason,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
 }
 
 func line(t domain.Task) taskLine {
 	return taskLine{
 		ID: tid(t.ID), Title: t.Title, Status: string(t.Status), Feature: fid(t.FeatureID),
 		Priority: priorityName(t.Priority), Assignee: t.Assignee, Version: t.Version, Reason: t.BlockedReason,
+		Tags: t.Tags,
 	}
 }
 

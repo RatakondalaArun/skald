@@ -192,7 +192,7 @@ func TestToolListAndSchemas(t *testing.T) {
 	want := []string{
 		"create_project", "get_project", "get_project_progress", "create_plan", "create_feature", "list_features",
 		"create_task", "get_task", "list_tasks", "get_next_tasks", "start_task", "update_task_status",
-		"add_task_note", "add_task_dependency", "record_verification", "report_task_result", "get_document", "put_document",
+		"add_task_note", "add_task_dependency", "tag_task", "list_tags", "record_verification", "report_task_result", "get_document", "put_document",
 		"sync_github",
 	}
 	var got []string

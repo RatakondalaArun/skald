@@ -153,6 +153,10 @@ func assertSeedIntact(t *testing.T, db *DB) {
 	if err != nil || len(ps) != 2 {
 		t.Errorf("ListProjects = %d projects, %v", len(ps), err)
 	}
+	// Tasks from before tags (migration 2) read back with no tags.
+	if task, err := GetTask(ctx, r, 1); err != nil || task.Tags == nil || len(task.Tags) != 0 {
+		t.Errorf("task 1 tags = %#v, %v; want empty", task.Tags, err)
+	}
 }
 
 func latestVersion(t *testing.T) int {

@@ -81,6 +81,7 @@ skald serve                             # dashboard at http://127.0.0.1:7331
 
 - `ref` names a task inside the file, and `depends_on` lists refs. `depends_on_existing` takes IDs such as `"T-3"`.
 - `weight` is 1 to 10 (default 1). `priority` is 0 (urgent) to 3 (low), default 2.
+- `tags` is an optional list of labels, such as `["backend", "auth"]`.
 - With an `idempotency_key` on every task, re-running the import creates nothing new. A feature is reused only when all of its tasks have keys.
 
 ## Use with Claude Code
@@ -115,12 +116,13 @@ IDs are short IDs (`T-42`, `F-7`). Every tool except `create_project` takes an o
 | `get_project_progress` | Derived progress per feature, plus blocked and stale tasks |
 | `create_plan` | Features, tasks and dependencies in one transaction |
 | `create_feature`, `list_features` | Add or list features |
-| `create_task`, `get_task`, `list_tasks` | Add, read or filter tasks (lists are capped) |
+| `create_task`, `get_task`, `list_tasks` | Add, read or filter tasks by feature, status, tags or readiness (lists are capped) |
 | `get_next_tasks` | Ready tasks, most urgent first |
 | `start_task` | Claim a ready task |
 | `update_task_status` | Block, unblock, reopen, cancel or complete |
 | `add_task_note` | Record progress, a finding or a decision |
 | `add_task_dependency` | Add a prerequisite (cycles are rejected) |
+| `tag_task`, `list_tags` | Add or remove tags on a task; list the project's tags with counts |
 | `record_verification` | Attach evidence: commit, pr, test_report, link or manual |
 | `report_task_result` | Note, evidence and done in one step. Nothing is written if it fails |
 | `get_document`, `put_document` | Versioned requirements, architecture, decisions, conventions |
@@ -179,9 +181,10 @@ Global flags: `--json` (JSON output on read commands), `-p, --project <slug>`. S
 | `init` | Create the data directory and database |
 | `project create\|list\|show\|archive\|link` | Manage projects (`create` takes `--slug`, `--repo`, `--no-repo`, `--description`; `link` ties an existing project to a directory, or removes the link with `--unlink`) |
 | `feature add\|list` | Add features (`--weight`, `--position`, `--description`) |
-| `task add\|list\|show` | Create and view tasks (`add` needs `--feature`; also `--priority`, `--weight`, `--criteria`, `--key`) |
+| `task add\|list\|show` | Create and view tasks (`add` needs `--feature`; also `--priority`, `--weight`, `--criteria`, `--key`, `--tag`; `list` filters with `--tag`) |
 | `task start\|done\|block\|unblock\|cancel\|reopen` | Move a task through its lifecycle (`block` needs `--reason`; `done` takes `--force`, `--note`) |
-| `task note`, `task edit`, `task dep add\|remove` | Notes, edits (title, description, criteria, priority, weight) and dependencies |
+| `task note`, `task edit`, `task dep add\|remove` | Notes, edits (title, description, criteria, priority, weight, `--tag`/`--untag`) and dependencies |
+| `task tags` | Tags used in the project, most used first |
 | `plan import <file\|->` | Import a JSON plan |
 | `github link [owner/name] [--unlink]`, `github sync [--repo] [--push] [--dry-run]` | Link a GitHub repository and sync it (see above) |
 | `evidence add <task>` | Attach evidence (`--kind`, `--ref`, `--summary`) |
@@ -195,6 +198,8 @@ Global flags: `--json` (JSON output on read commands), `-p, --project <slug>`. S
 | `doctor` | Check the database and data directory |
 
 Exit codes: 0 success, 1 runtime or domain error, 2 usage error. Errors go to stderr, and each says what to do next.
+
+Tags are free-form labels on tasks: up to 10 per task, each up to 32 characters of lowercase letters, digits and `- _ . : /` (input is lowercased, so `UI` becomes `ui`). Filtering by several tags matches tasks that carry all of them. The dashboard shows tags on board cards, filters the board by tag, and edits them in the task drawer.
 
 Task lifecycle: `todo` to `in_progress` (needs all dependencies done or cancelled) to `done` (needs evidence). A task can be `blocked` with a reason or `cancelled`, and done or cancelled tasks can be reopened. "Ready" and "waiting on dependencies" are derived, not stored.
 
