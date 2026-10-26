@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -122,4 +124,86 @@ func TestServeRunsAndStopsOnSignal(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Errorf("serve wrote to stdout: %q", stdout.String())
 	}
+}
+
+func TestServeBackgroundStartStatusStop(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("background mode is not supported on Windows")
+	}
+	s := newSandbox(t)
+	s.ok("init")
+	s.ok("project", "create", "Serve Demo")
+
+	r := s.ok("serve", "--background", "--addr", "127.0.0.1:0", "--json")
+	var st struct {
+		Running bool   `json:"running"`
+		PID     int    `json:"pid"`
+		URL     string `json:"url"`
+		Log     string `json:"log"`
+	}
+	decode(t, r.stdout, &st)
+	t.Cleanup(func() { s.run("serve", "stop") })
+	if !st.Running || st.PID <= 0 || !strings.HasPrefix(st.URL, "http://127.0.0.1:") || st.Log != filepath.Join(s.home, "serve.log") {
+		t.Fatalf("start = %+v", st)
+	}
+	res, err := http.Get(st.URL + "/api/projects")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || !strings.Contains(string(body), `"slug":"serve-demo"`) {
+		t.Fatalf("GET /api/projects = %d %s", res.StatusCode, body)
+	}
+
+	r = s.ok("serve", "status")
+	contains(t, r.stdout, st.URL)
+	contains(t, r.stdout, strconv.Itoa(st.PID))
+
+	r = s.fail(1, "serve", "--background", "--addr", "127.0.0.1:0")
+	contains(t, r.stderr, "already running")
+	contains(t, r.stderr, "serve stop")
+
+	r = s.ok("serve", "stop")
+	contains(t, r.stdout, "stopped")
+	if _, err := http.Get(st.URL + "/api/projects"); err == nil {
+		t.Fatal("dashboard still answers after stop")
+	}
+	if _, err := os.Stat(filepath.Join(s.home, "serve.json")); !os.IsNotExist(err) {
+		t.Fatalf("state file left after stop: %v", err)
+	}
+	log, _ := os.ReadFile(st.Log)
+	contains(t, string(log), "skald dashboard stopped")
+
+	r = s.run("serve", "status")
+	if r.code != 1 {
+		t.Fatalf("status after stop exited %d", r.code)
+	}
+	contains(t, r.stdout, "no background dashboard")
+	r = s.ok("serve", "stop")
+	contains(t, r.stdout, "no background dashboard")
+}
+
+func TestServeBackgroundReportsStartupFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("background mode is not supported on Windows")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	s := newSandbox(t)
+	r := s.fail(1, "serve", "--background", "--addr", ln.Addr().String())
+	contains(t, r.stderr, "exited before it was ready")
+	contains(t, r.stderr, "cannot listen")
+	if _, err := os.Stat(filepath.Join(s.home, "serve.json")); !os.IsNotExist(err) {
+		t.Fatalf("state file left after a failed start: %v", err)
+	}
+}
+
+func TestServeBackgroundStillChecksAddress(t *testing.T) {
+	s := newSandbox(t)
+	r := s.fail(2, "serve", "--background", "--addr", "0.0.0.0:7331")
+	contains(t, r.stderr, "--insecure-listen")
 }

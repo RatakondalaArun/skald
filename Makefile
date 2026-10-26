@@ -55,7 +55,7 @@ update:
 	fi
 	@$(MAKE) --no-print-directory install
 	@echo
-	@echo "Restart any running 'skald mcp' (restart Claude Code) and 'skald serve' so they use the new binary."
+	@echo "Restart any running 'skald mcp' (restart Claude Code) and 'skald serve' (for a background one: skald serve stop, then skald serve -d) so they use the new binary."
 	@echo "A newer database schema is applied the first time the new binary opens it; run 'skald backup' first if you want a copy."
 
 # Remove the installed binary. Your data in ~/.skald (or $$SKALD_HOME) is kept.

@@ -246,7 +246,8 @@ skald/
 │   ├── watch/         # event cursor poller
 │   ├── cli/           # Cobra commands, output formatting
 │   ├── mcpserver/     # tools -> service
-│   └── web/           # HTTP API, SSE, embedded static/
+│   ├── web/           # HTTP API, SSE, embedded static/
+│   └── daemon/        # detached background process, pid/state file
 ├── docs/
 ├── go.mod
 └── README.md
