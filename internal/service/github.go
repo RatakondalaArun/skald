@@ -39,7 +39,7 @@ func WithGitRemote(f func(dir string) (github.Repo, error)) Option {
 func defaultGitHub() (GitHubAPI, error) {
 	c, err := github.NewFromEnv()
 	if err != nil {
-		return nil, &domain.ValidationError{Field: "github", Problem: "no GitHub token found", Hint: "Set GITHUB_TOKEN (or GH_TOKEN), or sign in with `gh auth login`, then sync again."}
+		return nil, &domain.ValidationError{Field: "github", Problem: "no GitHub token found", Hint: "Run `skald github login`, set GITHUB_TOKEN (or GH_TOKEN), or sign in with `gh auth login`, then sync again."}
 	}
 	return c, nil
 }

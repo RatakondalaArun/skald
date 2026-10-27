@@ -17,6 +17,7 @@ const st = {
   form: null, // which inline task form is open: block, done, note or evidence
   draft: {}, // text typed into those forms
   busy: false,
+  gh: null, // GitHub sign-in state (GET /api/github/auth), loaded for linked projects
 };
 let route = { name: 'projects' };
 let data = null;
@@ -142,6 +143,7 @@ async function refresh({ hard = false } = {}) {
   }
   data = fresh;
   render();
+  if (fresh.summary?.project.github && !st.gh) loadGitHubAuth();
 }
 
 function titleFor() {
@@ -232,8 +234,45 @@ async function githubSync() {
   await refresh({ hard: true });
 }
 
+// GitHub sign-in: the server runs the device flow; the page shows the code and
+// polls until the user approves it on GitHub.
+async function loadGitHubAuth() {
+  const was = st.gh;
+  try {
+    st.gh = await api('/api/github/auth');
+  } catch {
+    return; // the main view reports connection problems
+  }
+  if (was?.pending && !st.gh.pending) {
+    if (st.gh.error) toast(st.gh.error, true);
+    else if (st.gh.signed_in) toast(st.gh.login ? `Signed in to GitHub as ${st.gh.login}.` : 'Signed in to GitHub.');
+  }
+  render();
+  pollGitHubAuth();
+}
+function pollGitHubAuth() {
+  clearTimeout(loadGitHubAuth.t);
+  if (st.gh?.pending) loadGitHubAuth.t = setTimeout(loadGitHubAuth, 3000);
+}
+async function githubAuth(action) {
+  st.busy = true;
+  render();
+  try {
+    st.gh = await api(`/api/github/${action}`, { method: 'POST', body: '{}' });
+    if (action === 'logout') toast('Signed out of GitHub.');
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    st.busy = false;
+  }
+  render();
+  pollGitHubAuth();
+}
+
 async function taskAction(action, t, extra) {
   if (action === 'github-sync') { await githubSync(); return; }
+  if (action === 'github-login') { await githubAuth('login'); return; }
+  if (action === 'github-logout') { await githubAuth('logout'); return; }
   if (action === 'cancel-ask') { st.confirmCancel = true; render(); return; }
   if (action === 'cancel-no') { st.confirmCancel = false; render(); return; }
   if (action === 'form') {

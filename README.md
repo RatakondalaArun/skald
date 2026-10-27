@@ -154,6 +154,7 @@ By default a task cannot be completed without at least one evidence item. Agents
 Skald can mirror a GitHub repository, so issues, milestones and pull requests stay the place your team works while Claude tracks progress in Skald.
 
 ```sh
+skald github login                      # sign in once with a code at github.com/login/device
 skald github link acme/rocket           # or no argument: use the checkout's origin remote
 skald github sync --dry-run             # show what would change, write nothing
 skald github sync                       # pull
@@ -176,7 +177,8 @@ skald github sync --create-issues --push   # also create issues for tasks that s
 - The evidence gate still applies. A closed issue completes its task with the merged PRs as evidence, or with a `link` to the closed issue when there is none. Nothing is forced, and a task whose dependencies are unfinished is skipped and reported.
 - GitHub never reopens a task. A task finished in Skald whose issue is still open is reported, and `--push` closes the issue with a comment that lists the evidence (as "not planned" for a cancelled task). `--push` then closes each open milestone whose feature is done in Skald, once none of its issues is left open. Nothing is written to GitHub without `--push`.
 - Work that started in Skald: `--create-issues` creates an issue for every task that has none (cancelled tasks aside) and a milestone for every feature that has none. Each link is saved as soon as GitHub returns it, so re-running never duplicates, and the next pull treats those issues like any other. With `--push`, the new issues of tasks already done are closed with their evidence. Try it with `--dry-run` first.
-- The token comes from `GITHUB_TOKEN`, `GH_TOKEN` or the GitHub CLI (`gh auth login`). It needs read access to issues, pull requests and discussions, and write access to issues for `--push`. Board status needs the `read:project` scope (`gh auth refresh -s read:project`); without it the sync still runs and says it skipped the boards. For GitHub Enterprise set `SKALD_GITHUB_API_URL=https://<host>/api/v3`.
+- Sign in with `skald github login` (or "Sign in to GitHub" in the dashboard): Skald shows a one-time code, you enter it at github.com/login/device, and the token is saved in `~/.skald/github.json`, readable by you only. `skald github status` shows which token a sync uses and `skald github logout` forgets it. It uses Skald's own GitHub OAuth App; on GitHub Enterprise, register an OAuth App with device flow enabled there and set `SKALD_GITHUB_CLIENT_ID` to its client ID.
+- The token comes from `GITHUB_TOKEN`, then `GH_TOKEN`, then `skald github login`, then the GitHub CLI (`gh auth login`). It needs read access to issues, pull requests and discussions, and write access to issues for `--push`. Board status needs the `read:project` scope (`gh auth refresh -s read:project`); without it the sync still runs and says it skipped the boards. For GitHub Enterprise set `SKALD_GITHUB_API_URL=https://<host>/api/v3`.
 - Agents can run the same sync with the `sync_github` MCP tool, and the dashboard shows a "Sync from GitHub" button once a project is linked. Board cards carry the issue number (#12), the task drawer links to the issue, and the Features tab links each feature to its milestone, for synced issues and the ones `--create-issues` made alike.
 - This is the only feature that uses the network, and only when you run a sync.
 
@@ -194,7 +196,8 @@ Global flags: `--json` (JSON output on read commands), `-p, --project <slug>`. S
 | `task note`, `task edit`, `task dep add\|remove` | Notes, edits (title, description, criteria, priority, weight, `--tag`/`--untag`) and dependencies |
 | `task tags` | Tags used in the project, most used first |
 | `plan import <file\|->` | Import a JSON plan |
-| `github link [owner/name] [--unlink]`, `github sync [--repo] [--push] [--dry-run]` | Link a GitHub repository and sync it (see above) |
+| `github link [owner/name] [--unlink]`, `github sync [--repo] [--push] [--create-issues] [--dry-run]` | Link a GitHub repository and sync it (see above) |
+| `github login`, `github logout`, `github status` | Sign in to GitHub, forget the saved token, show which token a sync uses |
 | `evidence add <task>` | Attach evidence (`--kind`, `--ref`, `--summary`) |
 | `next` | Tasks that can start now |
 | `status [--watch]` | Progress, blockers, ready and stale tasks |

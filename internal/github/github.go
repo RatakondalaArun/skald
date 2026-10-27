@@ -4,8 +4,8 @@
 // database; internal/service maps what it returns onto projects, features and
 // tasks.
 //
-// Network calls only happen when a user runs a sync. Nothing else in Skald
-// talks to GitHub.
+// Network calls only happen when a user runs a sync or signs in (oauth.go).
+// Nothing else in Skald talks to GitHub.
 package github
 
 import (
@@ -22,6 +22,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"skald/internal/config"
 )
 
 // DefaultAPIURL is the REST base for github.com.
@@ -83,22 +85,44 @@ func OriginRepo(dir string) (Repo, error) {
 	return ParseRepo(strings.TrimSpace(string(out)))
 }
 
-// TokenFromEnv returns GITHUB_TOKEN, then GH_TOKEN, then the token of the
+// Where a token came from, as ResolveToken reports it.
+const (
+	SourceEnvToken   = "GITHUB_TOKEN"
+	SourceEnvGHToken = "GH_TOKEN"
+	SourceLogin      = "skald github login"
+	SourceGHCLI      = "gh auth token"
+)
+
+// ResolveToken returns the token to use and where it came from: GITHUB_TOKEN,
+// then GH_TOKEN, then the token saved by `skald github login`, then the
 // GitHub CLI (`gh auth token`) if it is installed and signed in.
-func TokenFromEnv() string {
+func ResolveToken() (token, source string) {
 	for _, k := range []string{EnvToken, EnvGHToken} {
 		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
-			return v
+			return v, k
+		}
+	}
+	if path, err := config.GitHubTokenPath(); err == nil {
+		if t, err := LoadToken(path); err == nil && t.Token != "" {
+			return t.Token, SourceLogin
 		}
 	}
 	if out, err := exec.Command("gh", "auth", "token").Output(); err == nil {
-		return strings.TrimSpace(string(out))
+		if v := strings.TrimSpace(string(out)); v != "" {
+			return v, SourceGHCLI
+		}
 	}
-	return ""
+	return "", ""
+}
+
+// TokenFromEnv returns the token ResolveToken finds, or "".
+func TokenFromEnv() string {
+	t, _ := ResolveToken()
+	return t
 }
 
 // ErrNoToken is returned by NewFromEnv when no token can be found.
-var ErrNoToken = errors.New("no GitHub token: set GITHUB_TOKEN (or GH_TOKEN), or sign in with `gh auth login`")
+var ErrNoToken = errors.New("no GitHub token: run `skald github login`, set GITHUB_TOKEN (or GH_TOKEN), or sign in with `gh auth login`")
 
 // Client talks to the GitHub REST and GraphQL APIs.
 type Client struct {
@@ -140,7 +164,7 @@ type APIError struct {
 func (e *APIError) Error() string {
 	switch e.Status {
 	case http.StatusUnauthorized:
-		return "GitHub rejected the token (401). Check GITHUB_TOKEN or run `gh auth login` again."
+		return "GitHub rejected the token (401). Run `skald github login` again, or check GITHUB_TOKEN / `gh auth login`."
 	case http.StatusForbidden:
 		return "GitHub refused the request (403): " + e.Message + ". The token may lack the repo scope, or the rate limit was hit."
 	case http.StatusNotFound:
