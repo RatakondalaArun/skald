@@ -91,10 +91,32 @@ func TestGitHubSyncEndpoint(t *testing.T) {
 	if issues["T-1"] != float64(9) || issues["T-2"] != float64(42) {
 		t.Fatalf("board issues: %v", issues)
 	}
-	// The endpoint is a mutation: it needs the token like the others.
+	// Asked for a stream, the sync sends its progress as it goes, then the
+	// result.
 	req := e.postReq("/api/projects/rocket/github/sync", `{}`)
-	req.Header.Del(TokenHeader)
+	req.Header.Set("Accept", "application/x-ndjson")
 	rec := httptest.NewRecorder()
+	e.srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/x-ndjson") {
+		t.Fatalf("stream: %d %s", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	lines := strings.Split(strings.TrimSpace(rec.Body.String()), "\n")
+	var msgs []string
+	for _, l := range lines[:len(lines)-1] {
+		m := wtJSON(t, []byte(l))
+		msgs = append(msgs, m["progress"].(map[string]any)["message"].(string))
+	}
+	if got := strings.Join(msgs, "|"); got != "Applying issues: 0 of 1|Applying issues: 1 of 1" {
+		t.Fatalf("progress: %s", got)
+	}
+	if last := wtJSON(t, []byte(lines[len(lines)-1])); last["result"].(map[string]any)["repo"] != "acme/rocket" {
+		t.Fatalf("last line: %v", last)
+	}
+
+	// The endpoint is a mutation: it needs the token like the others.
+	req = e.postReq("/api/projects/rocket/github/sync", `{}`)
+	req.Header.Del(TokenHeader)
+	rec = httptest.NewRecorder()
 	e.srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("no token: %d", rec.Code)

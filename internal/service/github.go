@@ -223,6 +223,56 @@ type GitHubSyncOptions struct {
 	// DryRun reads GitHub and reports what would change without writing to
 	// the database or to GitHub.
 	DryRun bool
+	// Progress, when set, is told how far the sync has got: after each page
+	// read from GitHub, each issue applied, and each write to GitHub. It runs
+	// on the sync's goroutine, some calls inside the write transaction, so it
+	// must be quick.
+	Progress func(GitHubSyncProgress)
+}
+
+// GitHubSyncStage is one step of a sync, in the order they run.
+type GitHubSyncStage string
+
+const (
+	GitHubStageMilestones  GitHubSyncStage = "milestones"  // reading milestones
+	GitHubStageIssues      GitHubSyncStage = "issues"      // reading issues
+	GitHubStageDiscussions GitHubSyncStage = "discussions" // reading discussions
+	GitHubStageApply       GitHubSyncStage = "apply"       // applying issues to tasks
+	GitHubStageCreate      GitHubSyncStage = "create"      // --create-issues: creating milestones and issues
+	GitHubStagePush        GitHubSyncStage = "push"        // --push: closing issues and milestones
+)
+
+// GitHubSyncProgress says how far a sync has got within its current stage.
+type GitHubSyncProgress struct {
+	Stage GitHubSyncStage
+	Done  int
+	Total int // 0 when not known yet
+}
+
+// String describes the progress for a person, such as "Reading issues: 150
+// of 420".
+func (p GitHubSyncProgress) String() string {
+	what := map[GitHubSyncStage]string{
+		GitHubStageMilestones:  "Reading milestones",
+		GitHubStageIssues:      "Reading issues",
+		GitHubStageDiscussions: "Reading discussions",
+		GitHubStageApply:       "Applying issues",
+		GitHubStageCreate:      "Creating issues on GitHub",
+		GitHubStagePush:        "Closing finished issues on GitHub",
+	}[p.Stage]
+	if what == "" {
+		what = string(p.Stage)
+	}
+	if p.Total > 0 && p.Total >= p.Done {
+		return fmt.Sprintf("%s: %d of %d", what, p.Done, p.Total)
+	}
+	return fmt.Sprintf("%s: %d", what, p.Done)
+}
+
+func (o GitHubSyncOptions) report(stage GitHubSyncStage, done, total int) {
+	if o.Progress != nil {
+		o.Progress(GitHubSyncProgress{Stage: stage, Done: done, Total: total})
+	}
 }
 
 // GitHubSyncResult says what a sync did, or would do on a dry run.
@@ -339,7 +389,13 @@ func (s *Service) SyncGitHub(ctx context.Context, actor domain.Actor, ref Projec
 	if err != nil {
 		return GitHubSyncResult{}, err
 	}
-	snap, err := api.FetchRepo(ctx, repo)
+	fetchCtx := ctx
+	if o.Progress != nil {
+		fetchCtx = github.WithFetchProgress(ctx, func(kind string, read, total int) {
+			o.report(GitHubSyncStage(kind), read, total)
+		})
+	}
+	snap, err := api.FetchRepo(fetchCtx, repo)
 	if err != nil {
 		return GitHubSyncResult{}, githubErr(err)
 	}
@@ -353,7 +409,7 @@ func (s *Service) SyncGitHub(ctx context.Context, actor domain.Actor, ref Projec
 		if snap.NoBoardStatus {
 			res.Warnings = append(res.Warnings, "Projects board status was not read: the token lacks the read:project scope (gh auth refresh -s read:project).")
 		}
-		if err := s.applyGitHub(ctx, tx, s.meta(actor), p.ID, repo, snap, &res); err != nil {
+		if err := s.applyGitHub(ctx, tx, s.meta(actor), p.ID, repo, snap, &res, o); err != nil {
 			return err
 		}
 		if o.DryRun {
@@ -366,12 +422,12 @@ func (s *Service) SyncGitHub(ctx context.Context, actor domain.Actor, ref Projec
 	}
 
 	if o.CreateIssues {
-		if err := s.createGitHubIssues(ctx, actor, api, p.ID, repo, &res); err != nil {
+		if err := s.createGitHubIssues(ctx, actor, api, p.ID, repo, &res, o); err != nil {
 			return res, err
 		}
 	}
 	if o.Push {
-		s.pushGitHub(ctx, actor, api, repo, &res)
+		s.pushGitHub(ctx, actor, api, repo, &res, o)
 	}
 	return res, nil
 }
@@ -386,7 +442,7 @@ func githubErr(err error) error {
 	return err
 }
 
-func (s *Service) applyGitHub(ctx context.Context, tx *sql.Tx, m store.Meta, projectID int64, repo github.Repo, snap github.Snapshot, res *GitHubSyncResult) error {
+func (s *Service) applyGitHub(ctx context.Context, tx *sql.Tx, m store.Meta, projectID int64, repo github.Repo, snap github.Snapshot, res *GitHubSyncResult, o GitHubSyncOptions) error {
 	project, err := store.GetProject(ctx, tx, projectID)
 	if err != nil {
 		return err
@@ -483,7 +539,8 @@ func (s *Service) applyGitHub(ctx context.Context, tx *sql.Tx, m store.Meta, pro
 	}
 
 	// Pass 2: issues, each under its own savepoint.
-	for _, is := range snap.Issues {
+	o.report(GitHubStageApply, 0, len(snap.Issues))
+	for i, is := range snap.Issues {
 		if _, err := tx.ExecContext(ctx, `SAVEPOINT gh_issue`); err != nil {
 			return err
 		}
@@ -511,6 +568,7 @@ func (s *Service) applyGitHub(ctx context.Context, tx *sql.Tx, m store.Meta, pro
 		if _, err := tx.ExecContext(ctx, `RELEASE gh_issue`); err != nil {
 			return err
 		}
+		o.report(GitHubStageApply, i+1, len(snap.Issues))
 	}
 
 	// Open milestones whose features are now done here.
@@ -761,7 +819,7 @@ func skaldMarkerFor(taskID int64) string {
 // createGitHubIssues creates an issue for every task with no GitHub issue,
 // and a milestone for every feature with none. Each link is saved as soon as
 // GitHub returns it, so a failure part-way never leads to duplicates.
-func (s *Service) createGitHubIssues(ctx context.Context, actor domain.Actor, api GitHubAPI, projectID int64, repo github.Repo, res *GitHubSyncResult) error {
+func (s *Service) createGitHubIssues(ctx context.Context, actor domain.Actor, api GitHubAPI, projectID int64, repo github.Repo, res *GitHubSyncResult, o GitHubSyncOptions) error {
 	var (
 		project  domain.Project
 		features []domain.Feature
@@ -795,6 +853,14 @@ func (s *Service) createGitHubIssues(ctx context.Context, actor domain.Actor, ap
 		byFeature[t.FeatureID] = append(byFeature[t.FeatureID], t)
 	}
 
+	type batch struct {
+		f    domain.Feature
+		todo []domain.Task
+	}
+	var (
+		batches     []batch
+		total, done int
+	)
 	for _, f := range features {
 		if f.Status == domain.FeatureCancelled {
 			continue
@@ -807,9 +873,24 @@ func (s *Service) createGitHubIssues(ctx context.Context, actor domain.Actor, ap
 			}
 			todo = append(todo, t)
 		}
-		if len(todo) == 0 {
-			continue
+		if len(todo) > 0 {
+			batches = append(batches, batch{f, todo})
+			total += len(todo)
 		}
+	}
+	// A dry run writes nothing to GitHub, so there is no progress to show.
+	step := func(n int) {
+		if !res.DryRun {
+			done += n
+			o.report(GitHubStageCreate, done, total)
+		}
+	}
+	if total > 0 {
+		step(0)
+	}
+
+	for _, b := range batches {
+		f, todo := b.f, b.todo
 		ms, mapped := milestoneOf[f.ID]
 		if !mapped {
 			note := GitHubMilestoneNote{Title: f.Title, FeatureID: f.ID}
@@ -824,6 +905,7 @@ func (s *Service) createGitHubIssues(ctx context.Context, actor domain.Actor, ap
 					for _, t := range todo {
 						res.CreateFailed = append(res.CreateFailed, GitHubIssueNote{TaskID: t.ID, Note: "milestone for " + f.Title + ": " + githubErr(err).Error()})
 					}
+					step(len(todo))
 					continue
 				}
 				if err := s.saveGitHubLink(ctx, actor, projectID, repo, func(g *domain.GitHubSettings) { g.Milestones[strconv.Itoa(n)] = f.ID }); err != nil {
@@ -843,6 +925,7 @@ func (s *Service) createGitHubIssues(ctx context.Context, actor domain.Actor, ap
 				continue
 			}
 			n, url, err := api.CreateIssue(ctx, repo, in)
+			step(1)
 			if err != nil {
 				res.CreateFailed = append(res.CreateFailed, GitHubIssueNote{TaskID: t.ID, Note: githubErr(err).Error()})
 				continue
@@ -973,9 +1056,21 @@ func discussionsBody(repo github.Repo, ds []github.Discussion) string {
 
 // pushGitHub closes the issues of tasks finished in Skald. It runs after the
 // sync committed; each closed issue gets a note on its task.
-func (s *Service) pushGitHub(ctx context.Context, actor domain.Actor, api GitHubAPI, repo github.Repo, res *GitHubSyncResult) {
+func (s *Service) pushGitHub(ctx context.Context, actor domain.Actor, api GitHubAPI, repo github.Repo, res *GitHubSyncResult, o GitHubSyncOptions) {
 	diverged := res.Diverged
 	res.Diverged = nil
+	// Milestones count too, including those left open because some of their
+	// issues still are.
+	total, done := len(diverged)+len(res.MilestonesDiverged), 0
+	step := func() {
+		if !res.DryRun {
+			done++
+			o.report(GitHubStagePush, done, total)
+		}
+	}
+	if total > 0 && !res.DryRun {
+		o.report(GitHubStagePush, 0, total)
+	}
 	for _, d := range diverged {
 		var (
 			task domain.Task
@@ -991,6 +1086,7 @@ func (s *Service) pushGitHub(ctx context.Context, actor domain.Actor, api GitHub
 		if err != nil {
 			res.PushFailed = append(res.PushFailed, GitHubIssueNote{Issue: d.Issue, TaskID: d.TaskID, Note: err.Error()})
 			res.Diverged = append(res.Diverged, d)
+			step()
 			continue
 		}
 		reason, comment := "completed", fmt.Sprintf("Completed in Skald as %s.", domain.FormatID(domain.EntityTask, task.ID))
@@ -1012,7 +1108,9 @@ func (s *Service) pushGitHub(ctx context.Context, actor domain.Actor, api GitHub
 			res.Pushed = append(res.Pushed, note)
 			continue
 		}
-		if err := api.CloseIssue(ctx, repo, d.Issue, reason, comment); err != nil {
+		err = api.CloseIssue(ctx, repo, d.Issue, reason, comment)
+		step()
+		if err != nil {
 			res.PushFailed = append(res.PushFailed, GitHubIssueNote{Issue: d.Issue, TaskID: d.TaskID, Note: githubErr(err).Error()})
 			res.Diverged = append(res.Diverged, d)
 			continue
@@ -1041,6 +1139,7 @@ func (s *Service) pushGitHub(ctx context.Context, actor domain.Actor, api GitHub
 		if len(left) > 0 {
 			ms.Note = "not closed: " + strings.Join(left, ", ") + " still open on GitHub"
 			res.MilestonesDiverged = append(res.MilestonesDiverged, ms)
+			step()
 			continue
 		}
 		if res.DryRun {
@@ -1048,7 +1147,9 @@ func (s *Service) pushGitHub(ctx context.Context, actor domain.Actor, api GitHub
 			res.MilestonesPushed = append(res.MilestonesPushed, ms)
 			continue
 		}
-		if err := api.CloseMilestone(ctx, repo, ms.Milestone); err != nil {
+		err := api.CloseMilestone(ctx, repo, ms.Milestone)
+		step()
+		if err != nil {
 			ms.Note = githubErr(err).Error()
 			res.MilestonesPushFailed = append(res.MilestonesPushFailed, ms)
 			continue

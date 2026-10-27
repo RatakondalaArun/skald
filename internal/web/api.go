@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"skald/internal/domain"
 	"skald/internal/service"
@@ -39,16 +40,24 @@ func writeAPIError(w http.ResponseWriter, status int, kind, msg string) {
 // what to do next and are passed through; anything else is logged and replaced
 // by a generic message so internals do not leak.
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
+	if status, b, ok := s.errorResponse(r, err); ok {
+		writeJSON(w, status, b)
+	}
+}
+
+// errorResponse is the status and body fail sends for err; ok is false when
+// the client went away and nothing should be sent.
+func (s *Server) errorResponse(r *http.Request, err error) (status int, b errorBody, ok bool) {
 	if errors.Is(err, context.Canceled) || r.Context().Err() != nil {
-		return // the client went away
+		return 0, b, false // the client went away
 	}
 	var de domain.Error
 	if !errors.As(err, &de) {
 		s.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
-		writeAPIError(w, http.StatusInternalServerError, "internal", "Something went wrong inside skald. The details are in the skald serve log on stderr.")
-		return
+		b.Error.Kind, b.Error.Message = "internal", "Something went wrong inside skald. The details are in the skald serve log on stderr."
+		return http.StatusInternalServerError, b, true
 	}
-	status := http.StatusInternalServerError
+	status = http.StatusInternalServerError
 	switch de.Kind() {
 	case domain.KindNotFound:
 		status = http.StatusNotFound
@@ -59,7 +68,6 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case domain.KindInvalidTransition, domain.KindEvidenceRequired, domain.KindDependencyCycle:
 		status = http.StatusUnprocessableEntity
 	}
-	var b errorBody
 	b.Error.Kind, b.Error.Message = de.Kind().String(), de.Message()
 	var ce *domain.ConflictError
 	if errors.As(err, &ce) && ce.CurrentTask != nil {
@@ -70,7 +78,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		s.log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		b.Error.Message = "Something went wrong inside skald. The details are in the skald serve log on stderr."
 	}
-	writeJSON(w, status, b)
+	return status, b, true
 }
 
 func ref(r *http.Request) service.ProjectRef { return service.ProjectRef{Slug: r.PathValue("slug")} }
@@ -707,6 +715,11 @@ func (s *Server) apiTaskDependency(add bool) http.HandlerFunc {
 
 // apiGitHubSync pulls the project's linked GitHub repository, and with push
 // closes issues whose tasks are finished here. See service.SyncGitHub.
+//
+// A client that accepts application/x-ndjson gets the sync's progress as it
+// runs: one {"progress": {...}} line per update, then a last line that is
+// {"result": {...}} or an error body. Errors found before the sync starts
+// still come back as a plain JSON error with its status.
 func (s *Server) apiGitHubSync(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Push         bool `json:"push"`
@@ -716,8 +729,20 @@ func (s *Server) apiGitHubSync(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeBody(w, r, &body, `{"push": false, "create_issues": false, "dry_run": false}`) {
 		return
 	}
-	res, err := s.cfg.Service.SyncGitHub(r.Context(), webActor, ref(r), service.GitHubSyncOptions{Push: body.Push, CreateIssues: body.CreateIssues, DryRun: body.DryRun})
+	o := service.GitHubSyncOptions{Push: body.Push, CreateIssues: body.CreateIssues, DryRun: body.DryRun}
+	var ps *progressStream
+	if strings.Contains(r.Header.Get("Accept"), "application/x-ndjson") {
+		ps = &progressStream{w: w, rc: http.NewResponseController(w)}
+		o.Progress = ps.progress
+	}
+	res, err := s.cfg.Service.SyncGitHub(r.Context(), webActor, ref(r), o)
 	if err != nil {
+		if ps != nil && ps.started {
+			if _, b, ok := s.errorResponse(r, err); ok {
+				ps.line(b)
+			}
+			return
+		}
 		s.fail(w, r, err)
 		return
 	}
@@ -732,7 +757,7 @@ func (s *Server) apiGitHubSync(w http.ResponseWriter, r *http.Request) {
 		}
 		return out
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"repo": res.Repo, "dry_run": res.DryRun, "issues": res.Issues,
 		"features_created": res.FeaturesCreated, "tasks_created": res.TasksCreated, "tasks_updated": res.TasksUpdated,
 		"evidence_added": res.EvidenceAdded, "status_changes": len(res.StatusChanges),
@@ -742,5 +767,47 @@ func (s *Server) apiGitHubSync(w http.ResponseWriter, r *http.Request) {
 		"created":             note(res.Created),
 		"create_failed":       note(res.CreateFailed),
 		"milestones_diverged": len(res.MilestonesDiverged),
-	})
+	}
+	if ps != nil && ps.started {
+		ps.line(map[string]any{"result": out})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// progressStream writes a sync's progress as newline-delimited JSON. The
+// response starts with the first update, so an error before it can still use
+// its own status. Updates within a stage are sent at most ten times a second.
+type progressStream struct {
+	w       http.ResponseWriter
+	rc      *http.ResponseController
+	started bool
+	last    service.GitHubSyncProgress
+	at      time.Time
+}
+
+func (p *progressStream) progress(g service.GitHubSyncProgress) {
+	if p.started && g.Stage == p.last.Stage && g.Done != g.Total && time.Since(p.at) < 100*time.Millisecond {
+		return
+	}
+	p.last, p.at = g, time.Now()
+	p.line(map[string]any{"progress": map[string]any{
+		"stage": g.Stage, "done": g.Done, "total": g.Total, "message": g.String(),
+	}})
+}
+
+func (p *progressStream) line(v any) {
+	if !p.started {
+		h := p.w.Header()
+		h.Set("Content-Type", "application/x-ndjson; charset=utf-8")
+		h.Set("Cache-Control", "no-store")
+		h.Set("X-Accel-Buffering", "no")
+		p.w.WriteHeader(http.StatusOK)
+		p.started = true
+	}
+	// A long sync outlives the usual write deadline; each line extends it.
+	_ = p.rc.SetWriteDeadline(time.Now().Add(20 * time.Second))
+	if err := json.NewEncoder(p.w).Encode(v); err == nil {
+		_ = p.rc.Flush()
+	}
 }
