@@ -647,3 +647,52 @@ func TestGitHubLinks(t *testing.T) {
 		t.Fatalf("the No milestone feature got milestone %d", n)
 	}
 }
+
+func TestGitHubSyncReportsProgress(t *testing.T) {
+	e := ghNew(t)
+	if _, err := e.svc.CreatePlan(ghCtx, domain.Human, e.ref, PlanInput{Features: []PlanFeature{
+		{Title: "Local", Tasks: []PlanTask{{Ref: "a", Title: "One"}, {Ref: "b", Title: "Two"}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	var got []GitHubSyncProgress
+	o := GitHubSyncOptions{CreateIssues: true, Push: true, Progress: func(p GitHubSyncProgress) { got = append(got, p) }}
+
+	// A dry run writes nothing to GitHub, so only the pull reports.
+	o.DryRun = true
+	e.sync(t, o)
+	for _, p := range got {
+		if p.Stage != GitHubStageApply {
+			t.Fatalf("dry run reported %+v", p)
+		}
+	}
+
+	got, o.DryRun = nil, false
+	e.sync(t, o)
+	var stages []string
+	for _, p := range got {
+		stages = append(stages, fmt.Sprintf("%s %d/%d", p.Stage, p.Done, p.Total))
+	}
+	want := "apply 0/6,apply 1/6,apply 2/6,apply 3/6,apply 4/6,apply 5/6,apply 6/6,create 0/2,create 1/2,create 2/2"
+	if strings.Join(stages, ",") != want {
+		t.Fatalf("progress:\n got %s\nwant %s", strings.Join(stages, ","), want)
+	}
+
+	// Finish a synced task; the push reports closing its issue.
+	t6 := e.task(t, 6)
+	if _, _, err := e.svc.ReportTaskResult(ghCtx, domain.Human, t6.ID, TaskResult{Artifacts: []ArtifactInput{{Kind: domain.ArtifactCommit, Ref: "f00ba47"}}}); err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	e.sync(t, o)
+	last := got[len(got)-1]
+	if last != (GitHubSyncProgress{Stage: GitHubStagePush, Done: 1, Total: 1}) {
+		t.Fatalf("last progress = %+v", last)
+	}
+	if s := last.String(); s != "Closing finished issues on GitHub: 1 of 1" {
+		t.Fatalf("String() = %q", s)
+	}
+	if s := (GitHubSyncProgress{Stage: GitHubStageIssues, Done: 50}).String(); s != "Reading issues: 50" {
+		t.Fatalf("String() = %q", s)
+	}
+}

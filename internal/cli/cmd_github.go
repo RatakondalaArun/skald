@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -87,7 +88,10 @@ tasks stay as they are.`,
 		Example: "  skald github sync --dry-run\n  skald github sync --repo acme/rocket\n  skald github sync --push",
 		Args:    noArgs,
 		RunE: a.do(func(e *env, c *cobra.Command, args []string) error {
+			pr := newSyncProgress(e.errw)
+			o.Progress = pr.report
 			res, err := e.svc.SyncGitHub(e.ctx, e.actor, e.ref, o)
+			pr.finish()
 			if err != nil {
 				return err
 			}
@@ -256,4 +260,50 @@ func printGitHubSync(w io.Writer, r service.GitHubSyncResult) {
 	milestones("milestones pushed to GitHub:", r.MilestonesPushed)
 	milestones("milestone push failed:", r.MilestonesPushFailed)
 	milestones("milestones done here but open on GitHub:", r.MilestonesDiverged)
+}
+
+// syncProgress shows a sync's progress on stderr. On a terminal it keeps one
+// line up to date; otherwise it prints one line as each stage ends, so logs
+// get "Reading issues: 420 of 420" rather than hundreds of lines.
+type syncProgress struct {
+	w    io.Writer
+	tty  bool
+	last service.GitHubSyncProgress
+	seen bool
+	at   time.Time // when the terminal line was last drawn
+}
+
+func newSyncProgress(w io.Writer) *syncProgress {
+	return &syncProgress{w: w, tty: isTerminal(w)}
+}
+
+func (p *syncProgress) report(g service.GitHubSyncProgress) {
+	prev, changed := p.last, p.seen && g.Stage != p.last.Stage
+	p.last, p.seen = g, true
+	if !p.tty {
+		if changed {
+			fmt.Fprintln(p.w, prev)
+		}
+		return
+	}
+	if changed {
+		// Leave the finished stage on its own line, as it ended.
+		fmt.Fprintf(p.w, "\r\x1b[K%s\n", prev)
+	} else if g.Done != g.Total && time.Since(p.at) < 100*time.Millisecond {
+		return // redraw at most ten times a second
+	}
+	p.at = time.Now()
+	fmt.Fprintf(p.w, "\r\x1b[K%s", g)
+}
+
+// finish ends the progress output, before the summary goes to stdout.
+func (p *syncProgress) finish() {
+	if !p.seen {
+		return
+	}
+	if p.tty {
+		fmt.Fprintf(p.w, "\r\x1b[K%s\n", p.last)
+		return
+	}
+	fmt.Fprintln(p.w, p.last)
 }

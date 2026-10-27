@@ -138,6 +138,12 @@ func TestCLIGitHubSync(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.stdout, "pushed to GitHub") {
 		t.Fatalf("push: %d\n%s\n%s", r.code, r.stdout, r.stderr)
 	}
+	// Progress goes to stderr, one line per stage when it is not a terminal.
+	for _, line := range []string{"Reading milestones: 1\n", "Reading issues: 2\n", "Applying issues: 2 of 2\n", "Closing finished issues on GitHub: 2 of 2\n"} {
+		if !strings.Contains(r.stderr, line) {
+			t.Fatalf("progress %q missing from stderr:\n%s", line, r.stderr)
+		}
+	}
 	if !strings.Contains(r.stdout, `milestone 1 "Launch"`) {
 		t.Fatalf("milestone push not reported:\n%s", r.stdout)
 	}

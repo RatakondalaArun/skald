@@ -115,6 +115,11 @@ select, .btn, .search input {
 .tag.urgent { border-color: var(--blocked); color: var(--ink); font-weight: 600; }
 .tag.ready { border-color: var(--done); }
 .gh-auth { margin-left: 10px; }
+.gh-sync { margin-left: 10px; display: inline-flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+.gh-sync progress { appearance: none; width: 120px; height: 6px; border: 0; border-radius: 3px; overflow: hidden; background: color-mix(in srgb, var(--ink) 11%, transparent); accent-color: var(--accent); }
+.gh-sync progress::-webkit-progress-bar { background: transparent; }
+.gh-sync progress::-webkit-progress-value { background: var(--accent); border-radius: 3px; }
+.gh-sync progress::-moz-progress-bar { background: var(--accent); border-radius: 3px; }
 .gh-code { font-family: var(--mono); font-weight: 600; letter-spacing: 0.04em; padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 3px; user-select: all; }
 .tag.gh { font-family: var(--mono); }
 .labels { display: flex; flex-wrap: wrap; gap: 4px; }

@@ -103,6 +103,7 @@ type pageInfo struct {
 const milestonesQuery = `query($owner:String!,$name:String!,$cursor:String){
   repository(owner:$owner,name:$name){
     milestones(first:50,after:$cursor,states:[OPEN,CLOSED],orderBy:{field:NUMBER,direction:ASC}){
+      totalCount
       pageInfo{hasNextPage endCursor}
       nodes{number title description state url}
     }
@@ -112,6 +113,7 @@ const milestonesQuery = `query($owner:String!,$name:String!,$cursor:String){
 const issuesQuery = `query($owner:String!,$name:String!,$cursor:String){
   repository(owner:$owner,name:$name){
     issues(first:50,after:$cursor,states:[OPEN,CLOSED],orderBy:{field:CREATED_AT,direction:ASC}){
+      totalCount
       pageInfo{hasNextPage endCursor}
       nodes{
         number title body state stateReason url
@@ -148,17 +150,40 @@ const discussionsQuery = `query($owner:String!,$name:String!,$cursor:String){
   repository(owner:$owner,name:$name){
     hasDiscussionsEnabled
     discussions(first:50,after:$cursor,orderBy:{field:CREATED_AT,direction:ASC}){
+      totalCount
       pageInfo{hasNextPage endCursor}
       nodes{number title url closed isAnswered category{name}}
     }
   }
 }`
 
+// FetchProgress is told how far FetchRepo has got. kind is "milestones",
+// "issues" or "discussions"; read is how many of them it has read so far, and
+// total how many GitHub says there are (capped at what one sync reads; 0 until
+// the first page arrives).
+type FetchProgress func(kind string, read, total int)
+
+type progressKey struct{}
+
+// WithFetchProgress returns a context that makes FetchRepo report its progress
+// to fn, after each page it reads.
+func WithFetchProgress(ctx context.Context, fn FetchProgress) context.Context {
+	return context.WithValue(ctx, progressKey{}, fn)
+}
+
+func fetchProgress(ctx context.Context) FetchProgress {
+	if fn, ok := ctx.Value(progressKey{}).(FetchProgress); ok && fn != nil {
+		return fn
+	}
+	return func(string, int, int) {}
+}
+
 // FetchRepo reads milestones, issues (with linked pull requests and board
 // status) and discussions. Discussions are skipped when the repository has
 // them turned off.
 func (c *Client) FetchRepo(ctx context.Context, repo Repo) (Snapshot, error) {
 	snap := Snapshot{Repo: repo}
+	report := fetchProgress(ctx)
 	vars := func(cursor string) map[string]any {
 		v := map[string]any{"owner": repo.Owner, "name": repo.Name}
 		if cursor != "" {
@@ -171,8 +196,9 @@ func (c *Client) FetchRepo(ctx context.Context, repo Repo) (Snapshot, error) {
 		var out struct {
 			Repository *struct {
 				Milestones struct {
-					PageInfo pageInfo `json:"pageInfo"`
-					Nodes    []struct {
+					TotalCount int      `json:"totalCount"`
+					PageInfo   pageInfo `json:"pageInfo"`
+					Nodes      []struct {
 						Number      int    `json:"number"`
 						Title       string `json:"title"`
 						Description string `json:"description"`
@@ -191,6 +217,7 @@ func (c *Client) FetchRepo(ctx context.Context, repo Repo) (Snapshot, error) {
 		for _, m := range out.Repository.Milestones.Nodes {
 			snap.Milestones = append(snap.Milestones, Milestone{Number: m.Number, Title: m.Title, Description: m.Description, State: m.State, URL: m.URL})
 		}
+		report("milestones", len(snap.Milestones), min(out.Repository.Milestones.TotalCount, MaxMilestones))
 		pi := out.Repository.Milestones.PageInfo
 		if !pi.HasNextPage || len(snap.Milestones) >= MaxMilestones {
 			break
@@ -202,8 +229,9 @@ func (c *Client) FetchRepo(ctx context.Context, repo Repo) (Snapshot, error) {
 		var out struct {
 			Repository *struct {
 				Issues struct {
-					PageInfo pageInfo    `json:"pageInfo"`
-					Nodes    []issueNode `json:"nodes"`
+					TotalCount int         `json:"totalCount"`
+					PageInfo   pageInfo    `json:"pageInfo"`
+					Nodes      []issueNode `json:"nodes"`
 				} `json:"issues"`
 			} `json:"repository"`
 		}
@@ -224,6 +252,7 @@ func (c *Client) FetchRepo(ctx context.Context, repo Repo) (Snapshot, error) {
 		for _, n := range out.Repository.Issues.Nodes {
 			snap.Issues = append(snap.Issues, n.issue())
 		}
+		report("issues", len(snap.Issues), min(out.Repository.Issues.TotalCount, MaxIssues))
 		pi := out.Repository.Issues.PageInfo
 		if !pi.HasNextPage || len(snap.Issues) >= MaxIssues {
 			break
@@ -236,8 +265,9 @@ func (c *Client) FetchRepo(ctx context.Context, repo Repo) (Snapshot, error) {
 			Repository *struct {
 				Enabled     bool `json:"hasDiscussionsEnabled"`
 				Discussions struct {
-					PageInfo pageInfo `json:"pageInfo"`
-					Nodes    []struct {
+					TotalCount int      `json:"totalCount"`
+					PageInfo   pageInfo `json:"pageInfo"`
+					Nodes      []struct {
 						Number   int    `json:"number"`
 						Title    string `json:"title"`
 						URL      string `json:"url"`
@@ -265,6 +295,7 @@ func (c *Client) FetchRepo(ctx context.Context, repo Repo) (Snapshot, error) {
 			}
 			snap.Discussions = append(snap.Discussions, Discussion{Number: d.Number, Title: d.Title, URL: d.URL, Category: cat, Closed: d.Closed, Answered: d.Answered})
 		}
+		report("discussions", len(snap.Discussions), min(out.Repository.Discussions.TotalCount, MaxDiscussions))
 		pi := out.Repository.Discussions.PageInfo
 		if !pi.HasNextPage || len(snap.Discussions) >= MaxDiscussions {
 			break

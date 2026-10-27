@@ -18,6 +18,7 @@ const st = {
   draft: {}, // text typed into those forms
   busy: false,
   gh: null, // GitHub sign-in state (GET /api/github/auth), loaded for linked projects
+  sync: null, // progress of a running GitHub sync: { stage, done, total, message }
 };
 let route = { name: 'projects' };
 let data = null;
@@ -217,11 +218,60 @@ function toast(msg, isErr = false) {
 
 const DONE_WORD = { unblock: 'unblocked', cancel: 'cancelled', reopen: 'reopened', start: 'started', edit: 'updated', 'dep-add': 'dependency added', 'dep-remove': 'dependency removed', done: 'marked done', block: 'blocked', note: 'note added', evidence: 'evidence added' };
 
+// syncStream posts a GitHub sync and reads its progress lines as they come
+// (see apiGitHubSync). Errors found before the sync starts arrive as plain
+// JSON, like any other request.
+async function syncStream(path, onProgress) {
+  let res;
+  try {
+    res = await fetch(path, { method: 'POST', body: '{}', headers: { Accept: 'application/x-ndjson', 'Content-Type': 'application/json', 'X-Skald-Token': token } });
+  } catch {
+    throw new ApiError(0, { error: { kind: 'network', message: 'Cannot reach the skald server. Is skald serve still running?' } });
+  }
+  if (!(res.headers.get('Content-Type') || '').startsWith('application/x-ndjson')) {
+    const body = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError(res.status, body);
+    return body;
+  }
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = '';
+  for (;;) {
+    let chunk;
+    try {
+      chunk = await reader.read();
+    } catch {
+      throw new ApiError(0, { error: { kind: 'network', message: 'The connection to skald was lost during the sync. Reload to see what it changed.' } });
+    }
+    buf += chunk.value || '';
+    const lines = buf.split('\n');
+    buf = chunk.done ? '' : lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const msg = JSON.parse(line);
+      if (msg.progress) onProgress(msg.progress);
+      else if (msg.result) return msg.result;
+      else throw new ApiError(500, msg);
+    }
+    if (chunk.done) throw new ApiError(0, { error: { kind: 'network', message: 'The sync ended without a result. Reload to see what it changed.' } });
+  }
+}
+
+// paintSync updates the progress line in place, so a sync does not redraw the
+// whole board ten times a second.
+function paintSync() {
+  const el = document.querySelector('.gh-sync');
+  if (!el || !st.sync) { render(); return; }
+  const bar = el.querySelector('progress');
+  if (st.sync.total > 0) { bar.max = st.sync.total; bar.value = st.sync.done; } else bar.removeAttribute('value');
+  el.querySelector('.gh-sync-text').textContent = st.sync.message;
+}
+
 async function githubSync() {
   st.busy = true;
+  st.sync = { stage: '', done: 0, total: 0, message: 'Connecting to GitHub' };
   render();
   try {
-    const r = await api(`/api/projects/${enc(route.slug)}/github/sync`, { method: 'POST', body: JSON.stringify({}) });
+    const r = await syncStream(`/api/projects/${enc(route.slug)}/github/sync`, (p) => { st.sync = p; paintSync(); });
     const parts = [`Synced ${r.repo}: ${r.tasks_created} new, ${r.tasks_updated} updated, ${r.status_changes} status changes`];
     if (r.skipped.length) parts.push(`${r.skipped.length} skipped`);
     if (r.diverged.length) parts.push(`${r.diverged.length} finished here but open on GitHub`);
@@ -230,6 +280,7 @@ async function githubSync() {
     toast(err.message, true);
   } finally {
     st.busy = false;
+    st.sync = null;
   }
   await refresh({ hard: true });
 }

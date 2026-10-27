@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -105,14 +106,14 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if cursor == "" {
-			_, _ = io.WriteString(w, `{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":true,"endCursor":"c1"},"nodes":[
+			_, _ = io.WriteString(w, `{"data":{"repository":{"issues":{"totalCount":2,"pageInfo":{"hasNextPage":true,"endCursor":"c1"},"nodes":[
 			  {"number":1,"title":"A","body":"b","state":"CLOSED","stateReason":"COMPLETED","url":"i1","milestone":{"number":1},
 			   "labels":{"nodes":[{"name":"P1"}]},"assignees":{"nodes":[{"login":"ann"}]},
 			   "closedByPullRequestsReferences":{"nodes":[{"number":9,"title":"fix","url":"p9","state":"MERGED","mergeCommit":{"oid":"abc"}}]},
 			   "projectItems":{"nodes":[{"fieldValueByName":{"name":"Done"}},{"fieldValueByName":null}]}}]}}}}`)
 			return
 		}
-		_, _ = io.WriteString(w, `{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[
+		_, _ = io.WriteString(w, `{"data":{"repository":{"issues":{"totalCount":2,"pageInfo":{"hasNextPage":false},"nodes":[
 		  {"number":2,"title":"B","body":"","state":"OPEN","stateReason":null,"url":"i2","milestone":null,
 		   "labels":{"nodes":[]},"assignees":{"nodes":[]},"closedByPullRequestsReferences":{"nodes":[]},"projectItems":{"nodes":[]}}]}}}}`)
 	case strings.Contains(req.Query, "discussions("):
@@ -126,9 +127,17 @@ func TestFetchRepoPagesAndMaps(t *testing.T) {
 	ts := httptest.NewServer(&fakeGitHub{})
 	defer ts.Close()
 	c := New("tok", ts.URL)
-	snap, err := c.FetchRepo(context.Background(), Repo{"acme", "rocket"})
+	var progress []string
+	ctx := WithFetchProgress(context.Background(), func(kind string, read, total int) {
+		progress = append(progress, fmt.Sprintf("%s %d/%d", kind, read, total))
+	})
+	snap, err := c.FetchRepo(ctx, Repo{"acme", "rocket"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// One report per page; the milestone page has no totalCount.
+	if got := strings.Join(progress, ","); got != "milestones 1/0,issues 1/2,issues 2/2,discussions 1/0" {
+		t.Fatalf("progress: %s", got)
 	}
 	if len(snap.Milestones) != 1 || snap.Milestones[0].Title != "v1" {
 		t.Fatalf("milestones: %+v", snap.Milestones)

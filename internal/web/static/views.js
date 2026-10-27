@@ -243,6 +243,14 @@ function githubAuthLine(gh, st, act) {
   return h('span', { class: 'gh-auth' }, btn('github-login', 'Sign in to GitHub', 'Sign in with a one-time code on github.com'));
 }
 
+// syncProgress shows how far a running GitHub sync has got. app.js updates
+// it in place as progress arrives.
+function syncProgress(p) {
+  const bar = h('progress', { 'aria-hidden': 'true' });
+  if (p.total > 0) { bar.max = p.total; bar.value = p.done; }
+  return h('span', { class: 'gh-sync', role: 'status', 'aria-live': 'polite' }, bar, h('span', { class: 'gh-sync-text' }, p.message));
+}
+
 export function projectView(d, st, rerender, route, act) {
   const { summary, board: b, feed } = d;
   const p = summary.project;
@@ -275,8 +283,8 @@ export function projectView(d, st, rerender, route, act) {
       h('div', { class: 'proj-title' },
         h('div', null, h('h1', null, p.name), h('p', { class: 'sub' }, p.description ? `${p.description}. ` : '', parts.join(', '), '.'),
           p.github ? h('p', { class: 'sub' }, 'Linked to ', h('a', { href: `https://github.com/${p.github}`, target: '_blank', rel: 'noopener noreferrer' }, p.github), ' ',
-            h('button', { type: 'button', class: 'btn', 'data-key': 'github-sync', disabled: st.busy ? true : null, title: 'Pull milestones, issues, pull requests and discussions', onclick: () => act('github-sync') }, 'Sync from GitHub'),
-            githubAuthLine(st.gh, st, act)) : null),
+            h('button', { type: 'button', class: 'btn', 'data-key': 'github-sync', disabled: st.busy ? true : null, title: 'Pull milestones, issues, pull requests and discussions', onclick: () => act('github-sync') }, st.sync ? 'Syncing…' : 'Sync from GitHub'),
+            st.sync ? syncProgress(st.sync) : githubAuthLine(st.gh, st, act)) : null),
         h('div', { class: 'figure', title: 'Weighted by feature and task weights, so it can differ from the plain task count.' },
           h('span', { class: 'n' }, String(pct(summary.progress.fraction))), h('span', { class: 'u' }, '%'))),
       taskStrip(p.slug, summary.features, b.tasks), legend(c),
