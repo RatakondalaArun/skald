@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"skald/internal/github"
 )
 
 // fakeGitHubAPI serves one milestone, a closed issue with a merged PR and an
@@ -155,6 +157,10 @@ func TestCLIGitHubLogin(t *testing.T) {
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/login/device/code":
+			if r.FormValue("client_id") != github.DefaultClientID {
+				_, _ = io.WriteString(w, `{"error":"incorrect_client_credentials"}`)
+				return
+			}
 			_, _ = io.WriteString(w, `{"device_code":"dc","user_code":"WXYZ-0001","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}`)
 		case "/login/oauth/access_token":
 			_, _ = io.WriteString(w, `{"access_token":"gho_cli","scope":"repo"}`)
@@ -171,16 +177,13 @@ func TestCLIGitHubLogin(t *testing.T) {
 	// An empty PATH entry keeps a real gh CLI out of the token lookup.
 	base := []string{"GITHUB_TOKEN=", "GH_TOKEN=", "PATH=" + t.TempDir(), "SKALD_GITHUB_API_URL=" + gh.URL}
 
-	r := s.runIn(s.repo, base, "github", "login")
-	if r.code != 1 || !strings.Contains(r.stderr, "SKALD_GITHUB_CLIENT_ID") {
-		t.Fatalf("login without client id: %d %s", r.code, r.stderr)
-	}
-	r = s.runIn(s.repo, base, "github", "status")
+	r := s.runIn(s.repo, base, "github", "status")
 	if r.code != 1 || !strings.Contains(r.stdout, "skald github login") {
 		t.Fatalf("status before login: %d %s %s", r.code, r.stdout, r.stderr)
 	}
 
-	r = s.runIn(s.repo, append(base, "SKALD_GITHUB_CLIENT_ID=cid"), "github", "login")
+	// The built-in OAuth App client ID is used when SKALD_GITHUB_CLIENT_ID is unset.
+	r = s.runIn(s.repo, append(base, "SKALD_GITHUB_CLIENT_ID="), "github", "login")
 	if r.code != 0 || !strings.Contains(r.stderr, "WXYZ-0001") || !strings.Contains(r.stdout, "signed in to GitHub as octocat") {
 		t.Fatalf("login: %d\n%s\n%s", r.code, r.stdout, r.stderr)
 	}

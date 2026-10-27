@@ -126,6 +126,9 @@ func TestGitHubSignIn(t *testing.T) {
 	t.Setenv(github.EnvGHToken, "")
 	t.Setenv(github.EnvAPIURL, gh.URL)
 	t.Setenv(github.EnvClientID, "")
+	builtIn := github.DefaultClientID
+	github.DefaultClientID = "" // a build without an OAuth App
+	t.Cleanup(func() { github.DefaultClientID = builtIn })
 	e := wtNew(t)
 
 	_, st := e.get("/api/github/auth")

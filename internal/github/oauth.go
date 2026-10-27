@@ -14,12 +14,11 @@ import (
 	"time"
 )
 
-// DefaultClientID is the client ID of Skald's GitHub OAuth App, used by
-// `skald github login`. The device flow needs no client secret, so the ID is
-// safe to ship in the binary. Set it here, at build time with
-// -ldflags "-X skald/internal/github.DefaultClientID=<id>", or at run time
-// with SKALD_GITHUB_CLIENT_ID.
-var DefaultClientID = ""
+// DefaultClientID is the client ID of Skald's GitHub OAuth App (device flow
+// enabled), used by `skald github login`. The device flow needs no client
+// secret, so the ID is safe to ship in the binary. SKALD_GITHUB_CLIENT_ID
+// points Skald at another OAuth App, such as one on GitHub Enterprise.
+var DefaultClientID = "Ov23lixZ4zcGp7s30SZ6"
 
 // EnvClientID overrides DefaultClientID.
 const EnvClientID = "SKALD_GITHUB_CLIENT_ID"
